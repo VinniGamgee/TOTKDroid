@@ -81,7 +81,9 @@ static int get_kv(FILE *f, char **key, char **value) {
         end = p;
         *p = '\0';
     } else {
-        end = line + strlen(line) + 1;
+        /* Last line may have no newline: end points at the NUL terminator,
+         * not one character past it (which previously broke trimming). */
+        end = line + strlen(line);
     }
 
     p = line;
@@ -133,11 +135,10 @@ static int get_kv(FILE *f, char **key, char **value) {
     SKIP_SPACE(p);
     v = p;
 
-    /* Skip trailing whitespace */
-    for (p = end - 1; *p == '\t' || *p == ' '; --p)
-        ;
-
-    *(p + 1) = '\0';
+    /* Trim trailing whitespace, including when the last line has no newline. */
+    p = end;
+    while (p > v && (p[-1] == '\t' || p[-1] == ' ')) --p;
+    *p = '\0';
     /* Remove trailing inline comments and surrounding whitespace. */
     char *comment = strpbrk(v, "#;");
     if (comment) {
@@ -169,14 +170,21 @@ static char hextoi(char c) {
 void parse_hex_key(unsigned char *key, const char *hex, unsigned int len) {
     size_t original_len = strlen(hex);
     const char *digits = hex;
-    /* Some prod.keys export tools serialize 16-byte keys as 0x + 32 hex
-     * characters. This is the same key, not an extra 2-byte payload.
-     * Accept either 0x or 0X only when the remaining length is exact. */
-    if (original_len == 2U * len + 2U && hex[0] == '0' &&
-        (hex[1] == 'x' || hex[1] == 'X')) {
-        digits = hex + 2;
+    size_t digits_len = original_len;
+    /* Treat optional quotes and 0x notation as formatting, not key bytes.
+     * Never arbitrarily trim or truncate a malformed hexadecimal value. */
+    if (digits_len >= 2U &&
+        ((digits[0] == '"' && digits[digits_len-1] == '"') ||
+         (digits[0] == '\'' && digits[digits_len-1] == '\''))) {
+        digits++;
+        digits_len -= 2U;
     }
-    int valid = strlen(digits) == 2U * len;
+    if (digits_len == 2U * len + 2U && digits[0] == '0' &&
+        (digits[1] == 'x' || digits[1] == 'X')) {
+        digits += 2;
+        digits_len -= 2U;
+    }
+    int valid = digits_len == 2U * len;
     if (valid) {
         for (size_t i = 0; i < 2U * len; i++) {
             if (!ishex(digits[i])) { valid = 0; break; }
