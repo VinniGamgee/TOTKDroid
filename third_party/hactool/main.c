@@ -120,6 +120,7 @@ int main(int argc, char **argv) {
     nca_ctx_t nca_ctx;
     char input_name[0x200];
     filepath_t keypath;
+    int header_only = 0;
 
     prog_name = (argc < 1) ? "hactool" : argv[0];
 
@@ -194,6 +195,7 @@ int main(int argc, char **argv) {
             {"xcontenttype", 1, NULL, 42},
             {"appendsectypes", 0, NULL, 43},
             {"suppresskeys", 0, NULL, 44},
+            {"totkdroid-header-only", 0, NULL, 45},
             {NULL, 0, NULL, 0},
         };
 
@@ -439,6 +441,9 @@ int main(int argc, char **argv) {
             case 44:
                 nca_ctx.tool_ctx->settings.suppress_keydata_output = 1;
                 break;
+            case 45:
+                header_only = 1;  /* Read NCA metadata without parsing or extracting file sections. */
+                break;
             default:
                 usage();
                 return EXIT_FAILURE;
@@ -450,13 +455,18 @@ int main(int argc, char **argv) {
     if (keypath.valid == VALIDITY_VALID) {
         keyfile = os_fopen(keypath.os_path, OS_MODE_READ);
     }
-    FILE *homekeyfile = open_key_file((tool_ctx.action & ACTION_DEV) ? "dev" : "prod");
-    if (homekeyfile == NULL) {
-        printf("[WARN] %s.keys does not exist.\n", (tool_ctx.action & ACTION_DEV) ? "dev" : "prod");
-    } else if (keyfile == NULL) {
-        keyfile = homekeyfile;
-    } else {
-        fclose(homekeyfile);
+    /* Do not warn that $HOME/.switch/prod.keys is missing when -k already
+     * provided an explicit, readable keyset. It was a misleading error in the UI. */
+    if (keyfile == NULL) {
+        keyfile = open_key_file((tool_ctx.action & ACTION_DEV) ? "dev" : "prod");
+        if (keyfile == NULL) {
+            if (keypath.valid == VALIDITY_VALID) {
+                fprintf(stderr, "Unable to read explicit keyset (-k): %s\n", strerror(errno));
+                return EXIT_FAILURE;
+            }
+            fprintf(stderr, "No prod.keys keyset provided.\n");
+            return EXIT_FAILURE;
+        }
     }
 
     if (keyfile != NULL) {
@@ -516,6 +526,30 @@ int main(int argc, char **argv) {
 
     switch (tool_ctx.file_type) {
         case FILETYPE_NCA: {
+            if (header_only) {
+                /* Headers are AES-XTS encrypted with the header key, not title keys.
+                 * Parsing unrelated sections while scanning a package can fail if
+                 * those sections require different keys. Never extract during scan. */
+                nca_ctx.file = tool_ctx.file;
+                if (!nca_decrypt_header(&nca_ctx)) {
+                    fprintf(stderr, "Unable to decrypt NCA header (check header_key in prod.keys).\n");
+                    return EXIT_FAILURE;
+                }
+                printf("Title ID: %016" PRIx64 "\n", nca_ctx.header.title_id);
+                const char *types[] = { "Program", "Meta", "Control", "Manual", "Data", "PublicData" };
+                unsigned int type = nca_ctx.header.content_type;
+                printf("Content Type: %s\n", type < 6 ? types[type] : "Unknown");
+                int rights = 0;
+                for (unsigned int k = 0; k < 16; k++)
+                    if (nca_ctx.header.rights_id[k]) rights = 1;
+                if (rights) {
+                    printf("Rights ID: ");
+                    for (unsigned int k = 0; k < 16; k++)
+                        printf("%02x", nca_ctx.header.rights_id[k]);
+                    printf("\n");
+                }
+                break;
+            }
             if (nca_ctx.tool_ctx->base_nca_ctx != NULL) {
                 memcpy(&base_ctx.settings.keyset, &tool_ctx.settings.keyset, sizeof(nca_keyset_t));
                 base_ctx.settings.known_titlekeys = tool_ctx.settings.known_titlekeys;
