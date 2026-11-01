@@ -8,15 +8,18 @@ import java.io.*;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.*;
 
 /** Imports into a staging directory; the caller validates the result before installing it. */
 final class PackageImporter {
     interface Progress { void update(String phase, long bytes); }
     private final Context context;
     private final File work, keys, titles;
+    private final Uri suppliedTitleKeys;
     private final Progress progress;
-    PackageImporter(Context c, File w, File k, Progress p) {
-        context = c; work = w; keys = k; titles = new File(k.getParentFile(), "package-title.keys"); progress = p;
+    PackageImporter(Context c, File w, File k, Uri titleKeys, Progress p) {
+        context = c; work = w; keys = k; suppliedTitleKeys = titleKeys;
+        titles = new File(k.getParentFile(), "package-title.keys"); progress = p;
     }
     private static final class Source implements AutoCloseable, GamePackage.Reader {
         final ParcelFileDescriptor fd;
@@ -46,21 +49,47 @@ final class PackageImporter {
         String slice(GamePackage.Entry e) { return "slice:" + e.offset + ":" + e.size + ":" + path; }
         public void close() throws IOException { fd.close(); }
     }
-    private void tickets(Source s, Map<String,String> out) throws Exception {
-        if (s == null) return;
-        for (GamePackage.Entry e : s.entries) if (e.name.endsWith(".tik")) {
-            if (e.size < 0x2b0 || e.size > 65536) throw new IOException("Ticket inválido.");
-            byte[] t = new byte[(int)e.size]; s.read(e.offset, t);
-            // Common RSA-2048 ticket. Personalized tickets require console-side conversion.
-            if (ByteBuffer.wrap(t).order(ByteOrder.BIG_ENDIAN).getInt() != 0x10004 || t[0x281] != 0)
-                throw new IOException("Ticket personalizado ou formato não suportado.");
-            String id = hex(t, 0x2a0, 16), key = hex(t, 0x180, 16);
-            String old = out.put(id, key);
-            if (old != null && !old.equals(key)) throw new IOException("Tickets conflitantes.");
+    // title.keys contains encrypted AES title keys indexed by the NCA rights IDs.
+    // prod.keys alone cannot decrypt the console-bound RSA title-key block of a personalized ticket.
+    private void suppliedTitleKeys(Map<String,String> out) throws Exception {
+        if (suppliedTitleKeys == null) return;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                context.getContentResolver().openInputStream(suppliedTitleKeys), StandardCharsets.US_ASCII))) {
+            String line; long read = 0; int number = 0;
+            while ((line = reader.readLine()) != null) {
+                number++;
+                read += line.length() + 1L;
+                if (read > (1 << 20)) throw new IOException("title.keys maior que 1 MiB.");
+                line = line.split("[#;]", 2)[0].trim();
+                if (line.isEmpty()) continue;
+                String[] pair = line.split("=", -1);
+                if (pair.length != 2 || !pair[0].trim().matches("[0-9a-fA-F]{32}") ||
+                        !pair[1].trim().matches("[0-9a-fA-F]{32}"))
+                    throw new IOException("Entrada inválida em title.keys, linha " + number +
+                            ". Formato esperado: rights_id = chave_criptografada.");
+                String id = pair[0].trim().toLowerCase(Locale.ROOT);
+                String key = pair[1].trim().toLowerCase(Locale.ROOT);
+                String old = out.putIfAbsent(id, key);
+                if (old != null && !old.equals(key)) throw new IOException("Chaves conflitantes em title.keys.");
+            }
         }
+        if (out.isEmpty()) throw new IOException("title.keys não contém chaves válidas.");
     }
-    private static String hex(byte[] b, int at, int count) {
-        StringBuilder s = new StringBuilder(); for (int i = at; i < at + count; i++) s.append(String.format(Locale.ROOT, "%02x", b[i] & 255)); return s.toString();
+
+    private void tickets(Source s, Map<String,String> out, Set<String> personalized) throws Exception {
+        if (s == null) return;
+        for (GamePackage.Entry e : s.entries) if (e.name.toLowerCase(Locale.ROOT).endsWith(".tik")) {
+            if (e.size < 0x2b0 || e.size > 65536) throw new IOException("Ticket inválido.");
+            byte[] bytes = new byte[(int)e.size]; s.read(e.offset, bytes);
+            GameTicket ticket = GameTicket.read(bytes);
+            if (ticket.personalized) {
+                personalized.add(ticket.rightsId);
+                continue;
+            }
+            String old = out.putIfAbsent(ticket.rightsId, ticket.encryptedTitleKey);
+            if (old != null && !old.equals(ticket.encryptedTitleKey))
+                throw new IOException("Chaves conflitantes entre ticket e title.keys.");
+        }
     }
     private String run(List<String> options, File output) throws Exception {
         File helper = new File(context.getApplicationInfo().nativeLibraryDir, "libpackage_import.so");
@@ -85,7 +114,8 @@ final class PackageImporter {
             return capture.toString("UTF-8");
         } finally { process.destroy(); reader.join(); }
     }
-    private String program(Source s, boolean update) throws Exception {
+    private String program(Source s, boolean update, Map<String,String> titleKeys,
+                           Set<String> personalized) throws Exception {
         if (s == null) return null;
         String found = null;
         for (GamePackage.Entry e : s.entries) if (e.name.endsWith(".nca")) {
@@ -94,6 +124,14 @@ final class PackageImporter {
             if (java.util.regex.Pattern.compile("(?m)^Title ID:\\s*" + id + "\\s*$").matcher(info).find() &&
                 java.util.regex.Pattern.compile("(?m)^Content Type:\\s*Program\\s*$").matcher(info).find()) {
                 if (found != null) throw new IOException("Mais de um programa TOTK no pacote; selecione um pacote com apenas uma versão.");
+                Matcher rights = Pattern.compile("(?m)^Rights ID:[ \\t]*([0-9A-Fa-f]{32})[ \\t]*$").matcher(info);
+                if (rights.find()) {
+                    String id = rights.group(1).toLowerCase(Locale.ROOT);
+                    if (!titleKeys.containsKey(id))
+                        throw new IOException(personalized.contains(id)
+                            ? "Este programa usa ticket personalizado. prod.keys não basta: selecione também title.keys da sua própria cópia, com a chave de título correspondente."
+                            : "Este programa exige uma chave de título ausente. Selecione title.keys da sua própria cópia, além de prod.keys.");
+                }
                 found = s.slice(e);
             }
         }
@@ -101,12 +139,16 @@ final class PackageImporter {
     }
     void extract(Uri baseUri, Uri updateUri) throws Exception {
         try (Source base = new Source(context, baseUri); Source update = updateUri == null ? null : new Source(context, updateUri)) {
-            Map<String,String> tk = new TreeMap<>(); tickets(base, tk); tickets(update, tk);
+            Map<String,String> tk = new TreeMap<>();
+            Set<String> personalized = new HashSet<>();
+            suppliedTitleKeys(tk);
+            tickets(base, tk, personalized);
+            tickets(update, tk, personalized);
             try (Writer w = new OutputStreamWriter(new FileOutputStream(titles), StandardCharsets.US_ASCII)) {
                 for (Map.Entry<String,String> e : tk.entrySet()) w.write(e.getKey() + " = " + e.getValue() + "\n");
             }
-            String b = program(base, false);
-            String u = program(update == null ? base : update, true);
+            String b = program(base, false, tk, personalized);
+            String u = program(update == null ? base : update, true, tk, personalized);
             if (b == null) throw new IOException("Jogo base TOTK não encontrado ou chaves incompatíveis.");
             if (update != null && u == null) throw new IOException("O pacote selecionado não contém um update TOTK válido.");
             File out = new File(work, "romfs.bin"), exefs = new File(work, "exefs");
