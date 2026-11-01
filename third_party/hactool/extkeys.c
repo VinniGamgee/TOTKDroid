@@ -167,25 +167,33 @@ static char hextoi(char c) {
 }
 
 void parse_hex_key(unsigned char *key, const char *hex, unsigned int len) {
-    size_t actual = strlen(hex);
-    int valid = actual == 2U * len;
+    size_t original_len = strlen(hex);
+    const char *digits = hex;
+    /* Some prod.keys export tools serialize 16-byte keys as 0x + 32 hex
+     * characters. This is the same key, not an extra 2-byte payload.
+     * Accept either 0x or 0X only when the remaining length is exact. */
+    if (original_len == 2U * len + 2U && hex[0] == '0' &&
+        (hex[1] == 'x' || hex[1] == 'X')) {
+        digits = hex + 2;
+    }
+    int valid = strlen(digits) == 2U * len;
     if (valid) {
-        for (size_t i = 0; i < actual; i++) {
-            if (!ishex(hex[i])) { valid = 0; break; }
+        for (size_t i = 0; i < 2U * len; i++) {
+            if (!ishex(digits[i])) { valid = 0; break; }
         }
     }
     if (!valid) {
-        /* No raw key bytes in stdout/stderr: diagnostics may appear in screenshots. */
+        /* Never print raw keys or even partial key bytes. */
         const char *field = current_field ? current_field : "(sem nome)";
-        fprintf(stderr, "%s: entrada inválida em prod.keys: %s; esperado %u dígitos hexadecimais, recebido %zu caracteres.\n",
-                import_compat_mode ? "[WARN]" : "[ERROR]", field, 2U * len, actual);
+        fprintf(stderr, "%s: entrada inválida em prod.keys: %s; esperado %u dígitos hexadecimais (prefixo 0x opcional), recebido %zu caracteres.\n",
+                import_compat_mode ? "[WARN]" : "[ERROR]", field, 2U * len, original_len);
         memset(key, 0, len);
         if (!import_compat_mode) exit(EXIT_FAILURE);
         return;
     }
     memset(key, 0, len);
     for (unsigned int i = 0; i < 2U * len; i++) {
-        unsigned char val = (unsigned char)hextoi(hex[i]);
+        unsigned char val = (unsigned char)hextoi(digits[i]);
         if ((i & 1) == 0) val <<= 4;
         key[i >> 1] |= val;
     }
