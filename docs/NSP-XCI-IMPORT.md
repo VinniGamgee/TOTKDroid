@@ -5,7 +5,7 @@ Base exata: `v0.2.0-beta`, commit `c880634e3a1b4602a3fb68cb3b8072761bb88e7d`.
 ## Fluxo implementado
 
 Configurar arquivos → copiar → Importar NSP / XCI + update → selecionar jogo base →
-selecionar update 1.4.3 (ou indicar que já está incluído) → selecionar `prod.keys`.
+selecionar update 1.4.3 (ou indicar que já está incluído) → selecionar `prod.keys` → opcionalmente selecionar `title.keys` (quando o pacote usa ticket personalizado).
 Nenhuma chave ou arquivo do jogo acompanha o projeto.
 
 O leitor reconhece PFS0 (NSP) e a partição secure HFS0 do XCI. O importador usa o
@@ -18,7 +18,7 @@ A imagem e o executável são validados com as verificações do próprio port a
 instalação. A instalação existente é movida para backup antes da substituição e
 restaurada se a substituição falhar. Um backup deixado por encerramento abrupto é
 preservado e informado, não removido automaticamente. Saves não são modificados.
-As chaves temporárias ficam no diretório privado e são removidas ao terminar.
+As chaves temporárias ficam no diretório privado e são removidas ao terminar. Tickets personalizados não contêm diretamente uma chave AES utilizável: quando a NCA exige uma chave desse tipo, o importador pede `title.keys` exportado da própria cópia; só `prod.keys` não basta. A checagem é feita para o programa TOTK selecionado, e não rejeita tickets personalizados de conteúdos alheios.
 
 ## Limites
 
@@ -26,8 +26,7 @@ As chaves temporárias ficam no diretório privado e são removidas ao terminar.
 - Importação única, não montagem direta do NSP/XCI a cada execução.
 - Exige arquivo local com acesso aleatório e pelo menos 20 GiB livres. Manter uma
   instalação anterior até a conclusão requer esse espaço adicional.
-- Tickets comuns RSA-2048; tickets personalizados, NSZ/XCZ e pacotes divididos não
-  são suportados. Os tickets comuns vêm do pacote; prod.keys é escolhido pelo usuário.
+- Tickets comuns RSA-2048 são lidos automaticamente. Tickets personalizados exigem que a chave de título correspondente esteja em `title.keys` (escolhido opcionalmente); o bloco RSA do ticket não pode ser usado como chave AES. NSZ/XCZ e pacotes divididos não são suportados.
 - Um pacote com múltiplos programas TOTK da mesma categoria é rejeitado, sem escolher
   silenciosamente uma versão.
 - UI nova em português; o fluxo anterior de pastas permanece disponível.
@@ -64,7 +63,7 @@ Compilar helper no host: `cmake -S android/package_import -B /tmp/package-build 
 
 ## Validação pendente (não declarar pronto para uso)
 
-O APK Android compilou, mas nenhum dump real de TOTK foi importado nesta execução.
+O APK Android anterior compilou, mas as alterações posteriores (suporte a `title.keys` e tickets personalizados) ainda exigem uma nova compilação. Nenhum dump real de TOTK foi importado nesta execução.
 Ainda precisam ser testados em aparelho: execução do helper empacotado e abertura de
 `/proc/<pid>/fd`, NSP + update separado, XCI + update, pacote com update incluído,
 chaves ausentes/incorretas, falta de espaço, interrupção/recuperação e abertura do jogo.
