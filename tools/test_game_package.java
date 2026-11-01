@@ -56,6 +56,24 @@ class PackageTests {
             public void read(long at, byte[] out) { System.arraycopy(hugeHead, (int)at, out, 0, out.length); }
         };
         check(GamePackage.entries(huge).get(0).size == (5L << 30));
+        // Synthetic ticket headers: a personalized titlekey block is NOT an encrypted AES title key.
+        byte[] ticket = new byte[0x400];
+        ByteBuffer.wrap(ticket).order(ByteOrder.BIG_ENDIAN).putInt(0, 0x10004);
+        for (int i = 0; i < 16; i++) {
+            ticket[0x2a0 + i] = (byte)i;
+            ticket[0x180 + i] = (byte)(i + 16);
+        }
+        GameTicket common = GameTicket.read(ticket);
+        check(!common.personalized && common.rightsId.equals("000102030405060708090a0b0c0d0e0f"));
+        check(common.encryptedTitleKey.equals("101112131415161718191a1b1c1d1e1f"));
+        ticket[0x281] = 1;
+        GameTicket personalized = GameTicket.read(ticket);
+        check(personalized.personalized && personalized.encryptedTitleKey == null);
+        ticket[0x281] = 2;
+        try { GameTicket.read(ticket); throw new AssertionError("accepted invalid ticket key type"); }
+        catch (IOException expected) { checks++; }
+        try { GameTicket.read(new byte[12]); throw new AssertionError("accepted short ticket"); }
+        catch (IOException expected) { checks++; }
         System.out.println(checks + " package checks passed");
     }
 }
