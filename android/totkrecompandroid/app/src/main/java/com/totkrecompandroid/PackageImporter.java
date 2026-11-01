@@ -104,35 +104,91 @@ final class PackageImporter {
                 throw new IOException("Chaves conflitantes entre ticket e title.keys.");
         }
     }
-    private String run(List<String> options, File output) throws Exception {
+    /** Show the actual native error without exposing raw keys or command arguments. */
+    private static String failureHint(String output) {
+        String selected = "";
+        for (String line : output.split("\\r?\\n")) {
+            String s = line.trim();
+            if (s.isEmpty()) continue;
+            String lower = s.toLowerCase(Locale.ROOT);
+            if (lower.contains("error") || lower.contains("fail") || lower.contains("unable")
+                    || lower.contains("invalid") || lower.contains("permission")
+                    || lower.contains("denied") || lower.contains("not found")
+                    || lower.contains("not supported") || lower.contains("no such file"))
+                selected = s;
+        }
+        if (selected.isEmpty()) {
+            String[] lines = output.split("\\r?\\n");
+            for (int i = lines.length - 1; i >= 0; i--)
+                if (!lines[i].trim().isEmpty()) { selected = lines[i].trim(); break; }
+        }
+        // Avoid printing title keys, large hexadecimal values, or local paths.
+        selected = selected.replaceAll("(?i)\\b[0-9a-f]{32,}\\b", "[valor ocultado]");
+        selected = selected.replaceAll("(?i)titlekey\\s*[:=]\\s*\\S+", "titlekey=[oculto]");
+        selected = selected.replaceAll("(?:/[A-Za-z0-9_.-]+){2,}", "[caminho]");
+        if (selected.length() > 260) selected = selected.substring(0, 260) + "...";
+        return selected;
+    }
+
+    private String run(List<String> options, File output, String stage) throws Exception {
         File helper = new File(context.getApplicationInfo().nativeLibraryDir, "libpackage_import.so");
         if (!helper.canExecute()) throw new IOException("Este APK não contém o importador nativo.");
         List<String> cmd = new ArrayList<>(Arrays.asList(helper.getPath(), "--disablekeywarns", "--suppresskeys", "-k", keys.getPath()));
         cmd.addAll(options);
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
         pb.environment().put("TOTKDROID_TITLE_KEYS", titles.getPath());
-        Process process = pb.start();
+        Process process;
+        try { process = pb.start(); }
+        catch (IOException e) {
+            throw new IOException(stage + ": não foi possível iniciar a ferramenta (" +
+                    e.getClass().getSimpleName() + ": " + e.getMessage() + ")", e);
+        }
+        // Keep the final 32 KiB of output: the last diagnostic can follow verbose NCA info.
+        final int limit = 32768;
         ByteArrayOutputStream capture = new ByteArrayOutputStream();
         Thread reader = new Thread(() -> {
             try (InputStream in = process.getInputStream()) {
-                byte[] b = new byte[4096]; int n;
-                while ((n = in.read(b)) != -1) if (capture.size() < (1 << 20)) capture.write(b, 0, Math.min(n, (1 << 20) - capture.size()));
+                byte[] buffer = new byte[4096]; int n;
+                while ((n = in.read(buffer)) != -1) {
+                    synchronized (capture) {
+                        if (capture.size() + n > limit) {
+                            byte[] before = capture.toByteArray();
+                            int keep = Math.max(0, limit - n);
+                            capture.reset();
+                            if (keep > 0) capture.write(before, before.length - keep, keep);
+                        }
+                        capture.write(buffer, 0, n);
+                    }
+                }
             } catch (IOException ignored) { }
-        }); reader.start();
+        }, "package-import-output");
+        reader.start();
         try {
             while (!process.waitFor(500, java.util.concurrent.TimeUnit.MILLISECONDS))
-                progress.update(output == null ? "Conferindo pacote…" : "Aplicando update e preparando dados…", output == null ? 0 : output.length());
+                progress.update(output == null ? "Conferindo pacote..." : "Aplicando update e preparando dados...",
+                    output == null ? 0 : output.length());
             reader.join();
-            if (process.exitValue() != 0) throw new IOException("Falha ao ler o pacote. Confira as chaves, o jogo base e o update 1.4.3.");
-            return capture.toString("UTF-8");
-        } finally { process.destroy(); reader.join(); }
+            String result = capture.toString("UTF-8");
+            if (process.exitValue() != 0) {
+                String diagnostic = failureHint(result);
+                android.util.Log.e("TOTKDroid/PackageImport",
+                        stage + ": native exit " + process.exitValue() + " / " + diagnostic);
+                throw new IOException(stage + ": falha nativa (código " + process.exitValue() + ")" +
+                        (diagnostic.isEmpty() ? ", sem detalhes." : " — " + diagnostic));
+            }
+            return result;
+        } finally {
+            process.destroy();
+            reader.join();
+        }
     }
     private String program(Source s, boolean update, Map<String,String> titleKeys,
                            Set<String> personalized) throws Exception {
         if (s == null) return null;
         String found = null;
         for (GamePackage.Entry e : s.entries) if (e.name.endsWith(".nca")) {
-            String info = run(Arrays.asList("-i", "-t", "nca", s.slice(e)), null);
+            String info = run(Arrays.asList("-i", "-t", "nca", s.slice(e)), null,
+                    (update ? "Update" : "Jogo base") + ", NCA " + e.name);
             String id = update ? "0100f2c0115b6800" : "0100f2c0115b6000";
             if (java.util.regex.Pattern.compile("(?m)^Title ID:\\s*" + id + "\\s*$").matcher(info).find() &&
                 java.util.regex.Pattern.compile("(?m)^Content Type:\\s*Program\\s*$").matcher(info).find()) {
@@ -171,7 +227,7 @@ final class PackageImporter {
             List<String> args = new ArrayList<>(Arrays.asList("-x", "-t", "nca", "--exefsdir=" + exefs, "--romfs=" + out));
             if (u != null) args.add("--basenca=" + b);
             args.add(u == null ? b : u);
-            run(args, out);
+            run(args, out, "Extração do programa e aplicação do update 1.4.3");
             if (!out.isFile() || out.length() == 0 || !new File(exefs, "main").isFile())
                 throw new IOException("A leitura não gerou os dados necessários. Confira as chaves e o update.");
         } finally { titles.delete(); }
