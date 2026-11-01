@@ -67,17 +67,31 @@ with tempfile.TemporaryDirectory() as tmp:
         run('cmake', '--build', str(builder), '-j', '2')
         hactool = builder / 'libpackage_import.so'
         keyset = pathlib.Path(tmp) / 'prod.keys'
-        keyset.write_text('# synthetic keyset for an unencrypted NCA3 header\n')
+        # Synthetic keys only; an optional unsupported entry must not abort
+        # reading a package header and its value must never appear in logs.
+        keyset.write_text('\\ufeff# synthetic keyset (NO REAL KEYS)\\n' +
+                          'master_key_00 = DEADBEEF\\n' +
+                          'header_key = ' + '00' * 32 + '  # example only\\n')
         nca = bytearray(0xC00)
         nca[0x200:0x204] = b'NCA3'
         nca[0x205] = 0
         struct.pack_into('<Q', nca, 0x210, 0x0100F2C0115B6000)
         fake = pathlib.Path(tmp) / 'fake-nca.pkg'
         fake.write_bytes(b'X' * 4096 + nca)
-        completed = sp.run([str(hactool), '--totkdroid-header-only', '-t', 'nca',
-                            '-k', str(keyset), f'slice:4096:3072:{fake}'],
+        cmd = [str(hactool), '--totkdroid-header-only', '-t', 'nca',
+               '-k', str(keyset), f'slice:4096:3072:{fake}']
+        strict = sp.run(cmd, cwd=ROOT, capture_output=True, text=True)
+        assert strict.returncode != 0, strict.stdout
+        assert 'master_key_00' in strict.stderr, strict.stderr
+        assert 'DEADBEEF' not in strict.stderr, strict.stderr
+
+        # The TOTKDroid-specific flag ignores malformed extra entries, not
+        # the essential NCA header. All other hactool invocations stay strict.
+        completed = sp.run(cmd[:1] + ['--totkdroid-tolerant-keyset'] + cmd[1:],
                            cwd=ROOT, check=True, capture_output=True, text=True)
         assert 'Title ID: 0100f2c0115b6000' in completed.stdout, completed.stdout
         assert 'Content Type: Program' in completed.stdout, completed.stdout
+        assert 'master_key_00' in completed.stderr, completed.stderr
+        assert 'DEADBEEF' not in completed.stdout + completed.stderr
         assert 'prod.keys does not exist' not in completed.stdout, completed.stdout
-        print('Header-only NCA scan: title, content type, and explicit keyset passed')
+        print('Header-only NCA scan and optional malformed prod.keys entry passed')
