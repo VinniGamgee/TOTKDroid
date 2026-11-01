@@ -171,7 +171,7 @@ final class PackageImporter {
     private String run(List<String> options, File output, String stage) throws Exception {
         File helper = new File(context.getApplicationInfo().nativeLibraryDir, "libpackage_import.so");
         if (!helper.canExecute()) throw new IOException("Este APK não contém o importador nativo.");
-        List<String> cmd = new ArrayList<>(Arrays.asList(helper.getPath(), "--disablekeywarns", "--suppresskeys", "-k", keys.getPath()));
+        List<String> cmd = new ArrayList<>(Arrays.asList(helper.getPath(), "--disablekeywarns", "--suppresskeys", "--totkdroid-tolerant-keyset", "-k", keys.getPath()));
         cmd.addAll(options);
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
         pb.environment().put("TOTKDROID_TITLE_KEYS", titles.getPath());
