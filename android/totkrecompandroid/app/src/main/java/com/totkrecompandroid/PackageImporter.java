@@ -223,28 +223,27 @@ final class PackageImporter {
         }
     }
     private String program(Source s, boolean update, Map<String,String> titleKeys,
-                           Set<String> personalized) throws Exception {
+                           Set<String> personalized, boolean optional) throws Exception {
         if (s == null) return null;
-        String found = null;
-        for (GamePackage.Entry e : s.entries) if (e.name.endsWith(".nca")) {
+        List<GameNcaSelector.Entry> found = new ArrayList<>();
+        Map<String,GamePackage.Entry> named = new HashMap<>();
+        for (GamePackage.Entry e : s.entries) {
+            if (!e.name.toLowerCase(Locale.ROOT).endsWith(".nca")) continue;
             String info = run(Arrays.asList("--totkdroid-header-only", "-t", "nca", s.slice(e)), null,
                     (update ? "Update" : "Jogo base") + ", NCA " + e.name);
-            String id = update ? "0100f2c0115b6800" : "0100f2c0115b6000";
-            if (java.util.regex.Pattern.compile("(?m)^Title ID:\\s*" + id + "\\s*$").matcher(info).find() &&
-                java.util.regex.Pattern.compile("(?m)^Content Type:\\s*Program\\s*$").matcher(info).find()) {
-                if (found != null) throw new IOException("Mais de um programa TOTK no pacote; selecione um pacote com apenas uma versão.");
-                Matcher rights = Pattern.compile("(?m)^Rights ID:[ \\t]*([0-9A-Fa-f]{32})[ \\t]*$").matcher(info);
-                if (rights.find()) {
-                    String rightsId = rights.group(1).toLowerCase(Locale.ROOT);
-                    if (!titleKeys.containsKey(rightsId))
-                        throw new IOException(personalized.contains(rightsId)
-                            ? "Este programa usa ticket personalizado. prod.keys não basta: selecione também title.keys da sua própria cópia, com a chave de título correspondente."
-                            : "Este programa exige uma chave de título ausente. Selecione title.keys da sua própria cópia, além de prod.keys.");
-                }
-                found = s.slice(e);
-            }
+            found.add(GameNcaSelector.parse(e.name, info));
+            named.put(e.name, e);
         }
-        return found;
+        // In a combined XCI the Patch Meta may be alongside the base content.
+        // An absent optional update is fine; a separate update must match.
+        GameNcaSelector.Entry target = GameNcaSelector.choose(found, update, optional);
+        if (target == null) return null;
+        if (target.rightsId != null && !titleKeys.containsKey(target.rightsId)) {
+            throw new IOException(personalized.contains(target.rightsId)
+                ? "Este programa usa ticket personalizado. Selecione title.keys da sua própria cópia com a chave de título correspondente."
+                : "Chave de título ausente para o programa TOTK. Selecione title.keys da sua própria cópia.");
+        }
+        return s.slice(named.get(target.fileName));
     }
     void extract(Uri baseUri, Uri updateUri) throws Exception {
         try (Source base = new Source(context, baseUri); Source update = updateUri == null ? null : new Source(context, updateUri)) {
@@ -256,10 +255,9 @@ final class PackageImporter {
             try (Writer w = new OutputStreamWriter(new FileOutputStream(titles), StandardCharsets.US_ASCII)) {
                 for (Map.Entry<String,String> e : tk.entrySet()) w.write(e.getKey() + " = " + e.getValue() + "\n");
             }
-            String b = program(base, false, tk, personalized);
-            String u = program(update == null ? base : update, true, tk, personalized);
+            String b = program(base, false, tk, personalized, false);
+            String u = program(update == null ? base : update, true, tk, personalized, update == null);
             if (b == null) throw new IOException("Jogo base TOTK não encontrado ou chaves incompatíveis.");
-            if (update != null && u == null) throw new IOException("O pacote selecionado não contém um update TOTK válido.");
             File out = new File(work, "romfs.bin"), exefs = new File(work, "exefs");
             if (!exefs.mkdir()) throw new IOException("Não foi possível criar a pasta temporária.");
             // Room for the image plus the loose movie files needed by the runtime.
