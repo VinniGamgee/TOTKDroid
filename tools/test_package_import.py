@@ -9,7 +9,7 @@ def run(*args):
 with tempfile.TemporaryDirectory() as tmp:
     java = ROOT / 'android/totkrecompandroid/app/src/main/java/com/totkrecompandroid'
     run('java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-d', tmp,
-        str(java / 'GamePackage.java'), 'tools/test_game_package.java')
+        str(java / 'GamePackage.java'), str(java / 'GameTicket.java'), 'tools/test_game_package.java')
     run('java', '-cp', tmp, 'com.totkrecompandroid.PackageTests')
     binary = str(pathlib.Path(tmp) / 'slice-test')
     run('gcc', '-D_FILE_OFFSET_BITS=64', '-Iandroid/package_import',
