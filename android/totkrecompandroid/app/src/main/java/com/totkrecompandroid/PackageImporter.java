@@ -143,22 +143,24 @@ final class PackageImporter {
             throw new IOException(stage + ": não foi possível iniciar a ferramenta (" +
                     e.getClass().getSimpleName() + ": " + e.getMessage() + ")", e);
         }
-        // Keep the final 32 KiB of output: the last diagnostic can follow verbose NCA info.
-        final int limit = 32768;
+        // Keep the start for NCA metadata (Title ID/Content Type) and
+        // separately retain the last diagnostic from a verbose failed run.
+        final int headLimit = 1 << 20, tailLimit = 32768;
         ByteArrayOutputStream capture = new ByteArrayOutputStream();
+        ByteArrayOutputStream tail = new ByteArrayOutputStream();
         Thread reader = new Thread(() -> {
             try (InputStream in = process.getInputStream()) {
                 byte[] buffer = new byte[4096]; int n;
                 while ((n = in.read(buffer)) != -1) {
-                    synchronized (capture) {
-                        if (capture.size() + n > limit) {
-                            byte[] before = capture.toByteArray();
-                            int keep = Math.max(0, limit - n);
-                            capture.reset();
-                            if (keep > 0) capture.write(before, before.length - keep, keep);
-                        }
-                        capture.write(buffer, 0, n);
+                    if (capture.size() < headLimit)
+                        capture.write(buffer, 0, Math.min(n, headLimit - capture.size()));
+                    if (tail.size() + n > tailLimit) {
+                        byte[] before = tail.toByteArray();
+                        int keep = Math.max(0, tailLimit - n);
+                        tail.reset();
+                        if (keep > 0) tail.write(before, before.length - keep, keep);
                     }
+                    tail.write(buffer, 0, n);
                 }
             } catch (IOException ignored) { }
         }, "package-import-output");
@@ -170,7 +172,7 @@ final class PackageImporter {
             reader.join();
             String result = capture.toString("UTF-8");
             if (process.exitValue() != 0) {
-                String diagnostic = failureHint(result);
+                String diagnostic = failureHint(tail.toString("UTF-8"));
                 android.util.Log.e("TOTKDroid/PackageImport",
                         stage + ": native exit " + process.exitValue() + " / " + diagnostic);
                 throw new IOException(stage + ": falha nativa (código " + process.exitValue() + ")" +
