@@ -8,6 +8,52 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <stddef.h>
+
+/*
+ * Receive an already authorized SAF file descriptor through a local Unix
+ * socket. No need to reopen /proc/<parent-pid>/fd (blocked by some Android
+ * SELinux configurations) or copy multi-gigabyte NSP/XCI containers.
+ */
+static int fd_from_socket(const char *name) {
+    size_t len = strlen(name);
+    struct sockaddr_un addr;
+    if (!len || len >= sizeof(addr.sun_path) - 1) { errno = ENAMETOOLONG; return -1; }
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) return -1;
+    memset(&addr, 0, sizeof addr);
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path + 1, name, len); /* Linux abstract namespace. */
+    socklen_t addrlen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + len);
+    if (connect(sock, (struct sockaddr *)&addr, addrlen) < 0) {
+        int saved = errno; close(sock); errno = saved; return -1;
+    }
+    char marker;
+    struct iovec iov = { .iov_base = &marker, .iov_len = 1 };
+    union { struct cmsghdr alignment; char bytes[CMSG_SPACE(sizeof(int))]; } control;
+    struct msghdr msg;
+    memset(&msg, 0, sizeof msg);
+    memset(&control, 0, sizeof control);
+    msg.msg_iov = &iov; msg.msg_iovlen = 1;
+    msg.msg_control = control.bytes; msg.msg_controllen = sizeof control.bytes;
+    ssize_t n = recvmsg(sock, &msg, 0);
+    int fd = -1;
+    if (n == 1 && !(msg.msg_flags & MSG_CTRUNC)) {
+        for (struct cmsghdr *h = CMSG_FIRSTHDR(&msg); h; h = CMSG_NXTHDR(&msg, h)) {
+            if (h->cmsg_level == SOL_SOCKET && h->cmsg_type == SCM_RIGHTS &&
+                h->cmsg_len >= CMSG_LEN(sizeof(int))) {
+                memcpy(&fd, CMSG_DATA(h), sizeof fd);
+                break;
+            }
+        }
+    }
+    int saved = fd < 0 ? (n < 0 ? errno : EIO) : 0;
+    close(sock);
+    if (fd < 0) errno = saved;
+    return fd;
+}
 
 typedef struct { int fd; int64_t start, size, pos; } Slice;
 static ssize_t read_slice(void *p, char *buf, size_t n) {
@@ -50,7 +96,9 @@ FILE *package_open(const char *path, const char *mode) {
     const char *next = end + 1;
     int64_t size = strtoll(next, &end, 10);
     if (errno || end == next || *end != ':' || size <= 0 || start > INT64_MAX - size) return NULL;
-    int fd = open(end + 1, O_RDONLY);
+    const char *source = end + 1;
+    int fd = strncmp(source, "fdpass:", 7) == 0
+        ? fd_from_socket(source + 7) : open(source, O_RDONLY);
     if (fd < 0) return NULL;
     struct stat st;
     if (fstat(fd, &st) || start + size > st.st_size) { close(fd); errno = EINVAL; return NULL; }
