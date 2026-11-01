@@ -69,9 +69,9 @@ with tempfile.TemporaryDirectory() as tmp:
         keyset = pathlib.Path(tmp) / 'prod.keys'
         # Synthetic keys only; an optional unsupported entry must not abort
         # reading a package header and its value must never appear in logs.
-        keyset.write_text('\\ufeff# synthetic keyset (NO REAL KEYS)\\n' +
-                          'master_key_00 = DEADBEEF\\n' +
-                          'header_key = ' + '00' * 32 + '  # example only\\n')
+        keyset.write_text('\ufeff# synthetic keyset (NO REAL KEYS)\n' +
+                          'master_key_00 = DEADBEEF\n' +
+                          'header_key = ' + '00' * 32 + '  # example only\n')
         nca = bytearray(0xC00)
         nca[0x200:0x204] = b'NCA3'
         nca[0x205] = 0
