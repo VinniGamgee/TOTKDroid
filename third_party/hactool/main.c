@@ -370,7 +370,7 @@ int main(int argc, char **argv) {
                     return EXIT_FAILURE;
                 }
                 nca_ctx.tool_ctx->base_file_type = BASEFILE_FAKE;
-                nca_ctx.tool_ctx->base_file++; /* Guarantees base_file != NULL. I'm so sorry. */
+                nca_ctx.tool_ctx->base_file = (FILE *)(uintptr_t)1; /* Non-dereferenced sentinel for BASEFILE_FAKE; FILE is opaque on Android. */
                 break;
             case 32:
                 tool_ctx.action |= ACTION_ONLYUPDATEDROMFS;
