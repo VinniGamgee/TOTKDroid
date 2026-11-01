@@ -45,7 +45,9 @@ final class GameTicket {
     static GameTicket read(byte[] ticket) throws IOException {
         if (ticket.length < 4 || ticket.length > 65536)
             throw new IOException("Tamanho inválido de ticket (" + ticket.length + " bytes).");
-        int signatureType = ByteBuffer.wrap(ticket).order(ByteOrder.BIG_ENDIAN).getInt();
+        // ES ticket signature types are stored little-endian in Switch ticket dumps.
+        // E.g. 04 00 01 00 is RSA-2048/SHA-256 (0x00010004), not 0x04000100.
+        int signatureType = ByteBuffer.wrap(ticket).order(ByteOrder.LITTLE_ENDIAN).getInt();
         int data;
         boolean stripped = false;
         try {
