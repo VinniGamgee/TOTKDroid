@@ -126,9 +126,9 @@ final class PackageImporter {
                 if (found != null) throw new IOException("Mais de um programa TOTK no pacote; selecione um pacote com apenas uma versão.");
                 Matcher rights = Pattern.compile("(?m)^Rights ID:[ \\t]*([0-9A-Fa-f]{32})[ \\t]*$").matcher(info);
                 if (rights.find()) {
-                    String id = rights.group(1).toLowerCase(Locale.ROOT);
-                    if (!titleKeys.containsKey(id))
-                        throw new IOException(personalized.contains(id)
+                    String rightsId = rights.group(1).toLowerCase(Locale.ROOT);
+                    if (!titleKeys.containsKey(rightsId))
+                        throw new IOException(personalized.contains(rightsId)
                             ? "Este programa usa ticket personalizado. prod.keys não basta: selecione também title.keys da sua própria cópia, com a chave de título correspondente."
                             : "Este programa exige uma chave de título ausente. Selecione title.keys da sua própria cópia, além de prod.keys.");
                 }
