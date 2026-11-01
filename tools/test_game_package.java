@@ -74,6 +74,34 @@ class PackageTests {
         catch (IOException expected) { checks++; }
         try { GameTicket.read(new byte[12]); throw new AssertionError("accepted short ticket"); }
         catch (IOException expected) { checks++; }
+        // Switch ticket signature headers vary in size. All supported types
+        // must locate the same ticket fields relative to their own data offset.
+        int[] types = { 0x010000, 0x010001, 0x010002, 0x010003,
+                        0x010004, 0x010005, 0x010006 };
+        int[] offsets = { 0x240, 0x140, 0x080, 0x240, 0x140, 0x080, 0x040 };
+        for (int i = 0; i < types.length; i++) {
+            int pos = offsets[i];
+            check(GameTicket.dataOffset(types[i]) == pos);
+            byte[] variant = new byte[pos + 0x2c0];
+            ByteBuffer.wrap(variant).order(ByteOrder.BIG_ENDIAN).putInt(types[i]);
+            for (int j = 0; j < 16; j++) {
+                variant[pos + 0x40 + j] = (byte)(j + 16);
+                variant[pos + 0x160 + j] = (byte)j;
+            }
+            GameTicket parsed = GameTicket.read(variant);
+            check(!parsed.personalized && parsed.rightsId.equals(common.rightsId) &&
+                parsed.encryptedTitleKey.equals(common.encryptedTitleKey));
+            variant[pos + 0x141] = 1;
+            check(GameTicket.read(variant).personalized &&
+                GameTicket.read(variant).encryptedTitleKey == null);
+            byte[] truncated = Arrays.copyOf(variant, variant.length - 1);
+            try { GameTicket.read(truncated); throw new AssertionError("accepted truncated variant"); }
+            catch (IOException expected) { checks++; }
+        }
+        byte[] unknown = new byte[0x400];
+        ByteBuffer.wrap(unknown).order(ByteOrder.BIG_ENDIAN).putInt(0x012345);
+        try { GameTicket.read(unknown); throw new AssertionError("accepted unknown signature"); }
+        catch (IOException expected) { checks++; }
         System.out.println(checks + " package checks passed");
     }
 }
