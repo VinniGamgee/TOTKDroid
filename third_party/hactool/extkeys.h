@@ -7,6 +7,8 @@
 #include "settings.h"
 
 void parse_hex_key(unsigned char *key, const char *hex, unsigned int len);
+/* Import mode: ignore malformed extra key entries; never print secret values. */
+void extkeys_set_import_compat_mode(int enabled);
 void extkeys_initialize_settings(hactool_settings_t *settings, FILE *f);
 
 void extkeys_parse_titlekeys(hactool_settings_t *settings, FILE *f);
