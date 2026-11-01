@@ -6,22 +6,23 @@ import java.nio.ByteOrder;
 import java.util.Locale;
 
 /**
- * Switch ES ticket header reader. Signature headers have variable lengths;
- * the fields after them must NOT be read at a fixed absolute offset.
- * Does not verify the certificate chain or decrypt personalized RSA title keys.
+ * Reads Nintendo Switch ES ticket metadata and the encrypted common title key.
+ * Never decrypts a personalized ticket or verifies the signature certificate.
  */
 final class GameTicket {
     final String rightsId;
     final String encryptedTitleKey; // null for personalized tickets
     final boolean personalized;
+    final boolean strippedSignature;
 
-    private GameTicket(String id, String key, boolean personalized) {
+    private GameTicket(String id, String key, boolean personalized, boolean strippedSignature) {
         this.rightsId = id;
         this.encryptedTitleKey = key;
         this.personalized = personalized;
+        this.strippedSignature = strippedSignature;
     }
 
-    /** Signed ticket data starts after the signature and its alignment padding. */
+    /** Signed ticket data follows the signature and its alignment padding. */
     static int dataOffset(int signatureType) throws IOException {
         switch (signatureType) {
             case 0x010000: // RSA-4096 / SHA-1
@@ -37,23 +38,46 @@ final class GameTicket {
                 return 0x040;
             default:
                 throw new IOException(String.format(Locale.ROOT,
-                    "Assinatura de ticket não reconhecida (tipo 0x%08X).", signatureType));
+                    "Assinatura de ticket desconhecida (0x%08X).", signatureType));
         }
     }
 
     static GameTicket read(byte[] ticket) throws IOException {
         if (ticket.length < 4 || ticket.length > 65536)
-            throw new IOException("Ticket inválido (tamanho inesperado).");
+            throw new IOException("Tamanho inválido de ticket (" + ticket.length + " bytes).");
         int signatureType = ByteBuffer.wrap(ticket).order(ByteOrder.BIG_ENDIAN).getInt();
-        int data = dataOffset(signatureType);
-        // Complete standard Switch ticket data is 0x2C0 bytes.
+        int data;
+        boolean stripped = false;
+        try {
+            data = dataOffset(signatureType);
+        } catch (IOException unknownSignature) {
+            // Some exporters write just the 0x2C0-byte ES ticket body. Only
+            // accept the exact documented body length and a valid Switch
+            // ticket version, key type and nonzero Rights ID. Never try to
+            // decrypt a console-personalized ticket or guess a key.
+            if (ticket.length != 0x2c0 || (ticket[0x140] & 0xff) != 2)
+                throw unknownSignature;
+            data = 0;
+            stripped = true;
+        }
         if (ticket.length < data + 0x2c0)
-            throw new IOException("Ticket truncado para a assinatura informada.");
+            throw new IOException("Ticket incompleto: " + ticket.length +
+                    " bytes; esperado pelo menos " + (data + 0x2c0) + ".");
+        int version = ticket[data + 0x140] & 0xff;
         int keyType = ticket[data + 0x141] & 0xff;
+        if (version != 2)
+            throw new IOException("Versão de ticket não suportada (" + version + ").");
+        if (keyType != 0 && keyType != 1)
+            throw new IOException("Tipo de chave do ticket não suportado (" + keyType + ").");
         String id = hex(ticket, data + 0x160, 16);
-        if (keyType == 0) return new GameTicket(id, hex(ticket, data + 0x40, 16), false);
-        if (keyType == 1) return new GameTicket(id, null, true);
-        throw new IOException("Tipo de chave de ticket não suportado (" + keyType + ").");
+        if (id.equals("00000000000000000000000000000000"))
+            throw new IOException("Ticket sem Rights ID válido.");
+        if (keyType == 1)
+            return new GameTicket(id, null, true, stripped);
+        String key = hex(ticket, data + 0x40, 16);
+        if (key.equals("00000000000000000000000000000000"))
+            throw new IOException("Ticket comum sem chave de título preenchida.");
+        return new GameTicket(id, key, false, stripped);
     }
 
     private static String hex(byte[] b, int start, int count) {
