@@ -196,6 +196,7 @@ int main(int argc, char **argv) {
             {"appendsectypes", 0, NULL, 43},
             {"suppresskeys", 0, NULL, 44},
             {"totkdroid-header-only", 0, NULL, 45},
+            {"totkdroid-tolerant-keyset", 0, NULL, 46},
             {NULL, 0, NULL, 0},
         };
 
@@ -443,6 +444,9 @@ int main(int argc, char **argv) {
                 break;
             case 45:
                 header_only = 1;  /* Read NCA metadata without parsing or extracting file sections. */
+                break;
+            case 46:
+                extkeys_set_import_compat_mode(1);
                 break;
             default:
                 usage();
