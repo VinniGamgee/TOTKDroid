@@ -197,12 +197,19 @@ val preparePackageImporter by tasks.registering {
         val toolchain = sdk.resolve("ndk/${android.ndkVersion}/build/cmake/android.toolchain.cmake")
         require(cmake.isFile && toolchain.isFile) { "Install CMake 3.30.4 and NDK ${android.ndkVersion} through Android SDK Manager." }
         val build = layout.buildDirectory.dir("package-import").get().asFile
-        providers.exec {
-            commandLine(cmake, "-S", repo.resolve("android/package_import"), "-B", build,
-                "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$ninja", "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
-                "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-30", "-DCMAKE_BUILD_TYPE=Release")
-        }.result.get().assertNormalExitValue()
-        providers.exec { commandLine(cmake, "--build", build, "--parallel", "4") }.result.get().assertNormalExitValue()
+        fun runImporter(vararg args: Any) {
+            val process = providers.exec {
+                commandLine(*args)
+                isIgnoreExitValue = true
+            }
+            logger.lifecycle(process.standardOutput.asText.get())
+            logger.lifecycle(process.standardError.asText.get())
+            process.result.get().assertNormalExitValue()
+        }
+        runImporter(cmake, "-S", repo.resolve("android/package_import"), "-B", build,
+            "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$ninja", "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
+            "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-30", "-DCMAKE_BUILD_TYPE=Release")
+        runImporter(cmake, "--build", build, "--parallel", "4")
         build.resolve("libpackage_import.so").copyTo(output.get().asFile.resolve("libpackage_import.so"), overwrite = true)
     }
 }
