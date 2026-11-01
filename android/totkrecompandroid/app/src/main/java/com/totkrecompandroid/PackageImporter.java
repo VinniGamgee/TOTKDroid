@@ -115,10 +115,17 @@ final class PackageImporter {
     }
 
     private static final class TicketStats {
-        int total, common, personalized, ignored;
+        int total, common, personalized, ignored, stripped;
+        String lastRejection = "";
+        void rejected(String reason) {
+            ignored++;
+            // Never store title key data, only static ticket parser errors.
+            lastRejection = reason.length() > 140 ? reason.substring(0, 140) : reason;
+        }
         String description() {
             return total + " ticket(s): " + common + " comum(ns), "
-                + personalized + " personalizado(s), " + ignored + " não reconhecido(s)";
+                + personalized + " personalizado(s), " + ignored + " não reconhecido(s)"
+                + (stripped == 0 ? "" : ", " + stripped + " sem cabeçalho de assinatura");
         }
     }
 
@@ -130,7 +137,7 @@ final class PackageImporter {
             // contain non-standard tickets. Only the NCA selected for TOTK decides
             // whether a title key is actually needed. Never invent one from junk.
             if (e.size < 4 || e.size > 65536) {
-                stats.ignored++;
+                stats.rejected("Tamanho inválido de ticket (" + e.size + " bytes).");
                 android.util.Log.w("TOTKDroid/PackageImport", "Ignorando ticket com tamanho inválido: " + e.name);
                 continue;
             }
@@ -139,11 +146,12 @@ final class PackageImporter {
             try {
                 ticket = GameTicket.read(bytes);
             } catch (IOException unsupported) {
-                stats.ignored++;
+                stats.rejected(unsupported.getMessage());
                 android.util.Log.w("TOTKDroid/PackageImport",
                         "Ignorando ticket não reconhecido (" + e.name + "): " + unsupported.getMessage());
                 continue;
             }
+            if (ticket.strippedSignature) stats.stripped++;
             if (ticket.personalized) {
                 stats.personalized++;
                 personalized.add(ticket.rightsId);
@@ -261,7 +269,7 @@ final class PackageImporter {
             } else if (stats.common == 0 && stats.personalized > 0) {
                 reason = "Há tickets personalizados, mas nenhum fornece uma chave comum para este programa.";
             } else if (stats.ignored > 0 && stats.common == 0) {
-                reason = "Os tickets encontrados não puderam ser lidos.";
+                reason = "O ticket não foi reconhecido: " + stats.lastRejection;
             } else {
                 reason = "Nenhum ticket comum deste pacote corresponde à chave exigida por esta NCA.";
             }
