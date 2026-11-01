@@ -27,7 +27,8 @@ As chaves temporárias ficam no diretório privado e são removidas ao terminar.
 - Exige arquivo local com acesso aleatório e pelo menos 20 GiB livres. Manter uma
   instalação anterior até a conclusão requer esse espaço adicional.
 - A leitura de tickets suporta as sete variantes de assinatura descritas no formato Switch e calcula a posição dos dados a partir do tipo. Tickets não reconhecidos ou inválidos são ignorados (registrados no log), sem inventar chave; somente a NCA do programa TOTK determina se a importação exige uma chave de título.
-- Tickets comuns podem fornecer a chave criptografada. Tickets personalizados exigem que a chave de título correspondente esteja em `title.keys` (opcional); o bloco RSA do ticket não pode ser usado como chave AES. NSZ/XCZ e pacotes divididos não são suportados.
+- Tickets comuns podem fornecer a chave criptografada automaticamente. Tickets personalizados ou pacotes sem ticket correspondente exigem `title.keys` exportado da própria cópia (opcional apenas quando a chave já está no ticket comum). O bloco RSA personalizado não pode ser usado como chave AES. NSZ/XCZ e pacotes divididos não são suportados.
+- Ao faltar a chave de título, o erro deve distinguir jogo base de update e mostrar quantos tickets foram encontrados, comuns, personalizados ou não reconhecidos, sem imprimir direitos IDs nem chaves. Uma chave realmente ausente não pode ser sintetizada pelo importador.
 - Um pacote com múltiplos programas TOTK da mesma categoria é rejeitado, sem escolher
   silenciosamente uma versão.
 - UI nova em português; o fluxo anterior de pastas permanece disponível.
@@ -64,7 +65,7 @@ Compilar helper no host: `cmake -S android/package_import -B /tmp/package-build 
 
 ## Validação pendente (não declarar pronto para uso)
 
-A compilação anterior passou, mas a leitura de alguns tickets falhou no aparelho com a mensagem «Assinatura de ticket não suportada». A nova correção aceita cabeçalhos de assinatura variáveis e não bloqueia pacotes só por tickets sem chave utilizável. Ainda não há validação da importação completa com dump real.
+A compilação anterior passou, mas a leitura de alguns tickets falhou no aparelho com a mensagem «Assinatura de ticket não suportada». A nova correção aceita cabeçalhos de assinatura variáveis e não bloqueia pacotes só por tickets sem chave utilizável. Ainda não há validação da importação completa com dump real. A mensagem posterior «Chave de título ausente» indica que o importador chegou à validação de Rights ID, porém não encontrou chave correspondente; o erro agora identifica jogo base ou update e a situação dos tickets.
 Ainda precisam ser testados em aparelho: execução do helper empacotado e abertura de
 `/proc/<pid>/fd`, NSP + update separado, XCI + update, pacote com update incluído,
 chaves ausentes/incorretas, falta de espaço, interrupção/recuperação e abertura do jogo.
