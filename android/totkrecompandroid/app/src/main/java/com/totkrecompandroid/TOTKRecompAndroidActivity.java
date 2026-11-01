@@ -241,16 +241,98 @@ public class TOTKRecompAndroidActivity extends SDLActivity {
     // ---- pickers (called from the start screen, on SDL's thread)
     private static volatile boolean importInPlace;  // (the next game folder picked: its romfs/ used where it is)
 
+    private static final int REQ_PACKAGE = 0x4c60, REQ_UPDATE = 0x4c61, REQ_KEYS = 0x4c62;
+    private Uri packageBase, packageUpdate;
+    private static native String nativePackageDestination(int version);
+    private static native String nativePackageLoose(int fd, String directory);
+
     public static void pickGameFolder() {
         importInPlace = false;
-        self.runOnUiThread(() -> {
-            try {
-                self.startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_GAME);
-            } catch (Exception e) {
-                Log.e(TAG, "folder picker: " + e);
-                nativeImportDone(1);
+        self.runOnUiThread(() -> new AlertDialog.Builder(self)
+            .setTitle("Arquivos do jogo")
+            .setItems(new String[]{"Pasta extraída (exefs + romfs)", "Importar NSP / XCI + update"}, (dialog, which) -> {
+                if (which == 0) self.openGameFolder();
+                else {
+                    self.packageBase = self.packageUpdate = null;
+                    self.openPackageDocument(REQ_PACKAGE);
+                }
+            }).setOnCancelListener(d -> nativeImportDone(1)).show());
+    }
+
+    private void openGameFolder() {
+        try { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQ_GAME); }
+        catch (Exception e) { nativeImportDetail(e.toString()); nativeImportDone(5); }
+    }
+
+    private void openPackageDocument(int request) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivityForResult(intent, request);
+        } catch (Exception e) { nativeImportDetail(e.toString()); nativeImportDone(5); }
+    }
+
+    private void requestPackageKeys() {
+        new AlertDialog.Builder(this).setTitle("Chaves do seu console")
+            .setMessage("Selecione seu prod.keys. O app vai preparar um romfs.bin com o update aplicado, sem extrair milhares de arquivos. São necessários pelo menos 20 GiB livres. O jogo deve resultar na versão 1.4.3.")
+            .setPositiveButton("Selecionar prod.keys", (d, w) -> openPackageDocument(REQ_KEYS))
+            .setNegativeButton(android.R.string.cancel, (d, w) -> nativeImportDone(1))
+            .setOnCancelListener(d -> nativeImportDone(1)).show();
+    }
+
+    private void importPackage(Uri keyUri) {
+        nativeImportLooking();
+        File staging = new File(getExternalFilesDir(null), "package-staging");
+        File keys = new File(getFilesDir(), "package-import.keys");
+        File destination = null, backup = null;
+        boolean movedOld = false, installed = false;
+        try {
+            deleteTree(staging);
+            if (!staging.mkdirs()) throw new IOException("Não foi possível criar a pasta de importação.");
+            try (InputStream in = getContentResolver().openInputStream(keyUri); OutputStream out = new FileOutputStream(keys)) {
+                if (in == null) throw new IOException("Não foi possível ler prod.keys.");
+                byte[] buf = new byte[8192]; int count = 0, n;
+                while ((n = in.read(buf)) != -1) {
+                    count += n; if (count > (1 << 20)) throw new IOException("Arquivo de chaves inválido (maior que 1 MiB).");
+                    out.write(buf, 0, n);
+                }
+                if (count == 0) throw new IOException("Arquivo de chaves vazio.");
             }
-        });
+            new PackageImporter(this, staging, keys, (phase, bytes) -> {
+                nativeImportProgress(bytes, 20L * 1024 * 1024 * 1024);
+            }).extract(packageBase, packageUpdate);
+            byte[] head = new byte[0x48];
+            try (java.io.DataInputStream in = new java.io.DataInputStream(new FileInputStream(new File(staging, "exefs/main")))) { in.readFully(head); }
+            int version = nativeGameVersion(head);
+            if (version == 0) throw new IOException("O executável não é TOTK 1.4.3. Selecione o update 1.4.3 junto do jogo base.");
+            File img = new File(staging, "romfs.bin");
+            if (!nativeCheckRomfsImage(version, android.os.ParcelFileDescriptor.open(img, android.os.ParcelFileDescriptor.MODE_READ_ONLY).detachFd()))
+                throw new IOException("Os dados do jogo não correspondem ao executável 1.4.3.");
+            String failure = nativePackageLoose(android.os.ParcelFileDescriptor.open(img, android.os.ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), staging.getPath());
+            if (failure != null) throw new IOException(failure);
+            destination = new File(nativePackageDestination(version));
+            backup = new File(destination.getParentFile(), destination.getName() + ".package-backup");
+            // An interrupted previous install is kept for recovery, never silently deleted.
+            if (backup.exists()) throw new IOException("Há um backup de uma importação interrompida em " + backup);
+            if (destination.exists()) {
+                if (!destination.renameTo(backup)) throw new IOException("Não foi possível preservar a instalação anterior.");
+                movedOld = true;
+            }
+            nativeImportBegin("NSP / XCI (1.4.3)", version);
+            if (!destination.delete() || !staging.renameTo(destination)) throw new IOException("Não foi possível instalar os arquivos preparados.");
+            installed = true;
+            nativeImportDone(0);
+            if (movedOld) deleteTree(backup);
+        } catch (Exception e) {
+            if (movedOld && !installed) {
+                if (destination != null) deleteTree(destination);
+                if (!backup.renameTo(destination)) e = new IOException("Instalação anterior preservada em " + backup + ". " + e.getMessage());
+            }
+            nativeImportDetail(e.getMessage() == null ? e.toString() : e.getMessage());
+            nativeImportDone(5);
+        } finally {
+            keys.delete(); deleteTree(staging); packageBase = packageUpdate = null;
+        }
     }
 
     // Game files used in place (Game Files > Game files: Use them in place): the native side reads the picked romfs/ by
@@ -270,8 +352,8 @@ public class TOTKRecompAndroidActivity extends SDLActivity {
             nativeImportDone(5);
             return;
         }
-        pickGameFolder();
         importInPlace = true;
+        self.runOnUiThread(() -> self.openGameFolder());
     }
 
     // A folder the file picker gave (its document id: "primary:Download/BOTW", "1A2B-3C4D:Games/BOTW", "raw:/storage/...")
@@ -348,6 +430,20 @@ public class TOTKRecompAndroidActivity extends SDLActivity {
 
     @Override
     protected void onActivityResult(int req, int result, Intent data) {
+        if (req == REQ_PACKAGE || req == REQ_UPDATE || req == REQ_KEYS) {
+            Uri uri = result == Activity.RESULT_OK && data != null ? data.getData() : null;
+            if (uri == null) { packageBase = packageUpdate = null; nativeImportDone(1); return; }
+            if (req == REQ_PACKAGE) {
+                packageBase = uri;
+                new AlertDialog.Builder(this).setTitle("Update do TOTK")
+                    .setMessage("Selecione o update 1.4.3. Se ele já estiver incluído no pacote, escolha ‘Já está incluído’.")
+                    .setPositiveButton("Selecionar update", (d, w) -> openPackageDocument(REQ_UPDATE))
+                    .setNegativeButton("Já está incluído", (d, w) -> requestPackageKeys())
+                    .setOnCancelListener(d -> nativeImportDone(1)).show();
+            } else if (req == REQ_UPDATE) { packageUpdate = uri; requestPackageKeys(); }
+            else new Thread(() -> importPackage(uri), "package-import").start();
+            return;
+        }
         if (req == REQ_GAME) {
             Uri tree = result == Activity.RESULT_OK && data != null ? data.getData() : null;
             if (tree == null) nativeImportDone(1);

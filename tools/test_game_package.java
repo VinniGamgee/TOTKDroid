@@ -1,0 +1,61 @@
+package com.totkrecompandroid;
+import java.io.*;
+import java.nio.*;
+import java.util.*;
+
+class PackageTests {
+    static int checks;
+    static GamePackage.Reader reader(byte[] b) {
+        return new GamePackage.Reader() {
+            public long length() { return b.length; }
+            public void read(long at, byte[] out) throws IOException {
+                if (at < 0 || at > b.length - out.length) throw new EOFException();
+                System.arraycopy(b, (int)at, out, 0, out.length);
+            }
+        };
+    }
+    static byte[] container(boolean hfs, String name, byte[] payload) {
+        byte[] names = (name + "\0").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int stride = hfs ? 64 : 24;
+        ByteBuffer b = ByteBuffer.allocate(16 + stride + names.length + payload.length).order(ByteOrder.LITTLE_ENDIAN);
+        b.put((hfs ? "HFS0" : "PFS0").getBytes()); b.putInt(1); b.putInt(names.length); b.putInt(0);
+        b.putLong(0); b.putLong(payload.length); b.putInt(0);
+        b.position(16 + stride); b.put(names); b.put(payload); return b.array();
+    }
+    static void check(boolean ok) { checks++; if (!ok) throw new AssertionError("check " + checks); }
+    static void rejects(byte[] b) throws Exception {
+        try { GamePackage.entries(reader(b)); throw new AssertionError("accepted bad package"); }
+        catch (IOException expected) { checks++; }
+    }
+    public static void main(String[] args) throws Exception {
+        byte[] nsp = container(false, "test.nca", new byte[]{1,2,3});
+        List<GamePackage.Entry> e = GamePackage.entries(reader(nsp));
+        check(e.size() == 1 && e.get(0).name.equals("test.nca") && e.get(0).size == 3);
+        check(nsp[(int)e.get(0).offset] == 1);
+        byte[] secure = container(true, "game.nca", new byte[]{4,5,6});
+        byte[] root = container(true, "secure", secure);
+        byte[] xci = new byte[0xF000 + root.length];
+        ByteBuffer.wrap(xci).order(ByteOrder.LITTLE_ENDIAN).position(0x100).put("HEAD".getBytes());
+        ByteBuffer.wrap(xci).order(ByteOrder.LITTLE_ENDIAN).putLong(0x130, 0xF000);
+        System.arraycopy(root, 0, xci, 0xF000, root.length);
+        e = GamePackage.entries(reader(xci)); check(e.get(0).name.equals("game.nca")); check(xci[(int)e.get(0).offset] == 4);
+        rejects(new byte[2]); rejects(Arrays.copyOf(nsp, nsp.length-1));
+        rejects(container(false, "../escape", new byte[1]));
+        byte[] bad = nsp.clone(); ByteBuffer.wrap(bad).order(ByteOrder.LITTLE_ENDIAN).putLong(16, Long.MAX_VALUE); rejects(bad);
+        bad = nsp.clone(); ByteBuffer.wrap(bad).order(ByteOrder.LITTLE_ENDIAN).putLong(24, Long.MAX_VALUE); rejects(bad);
+        bad = nsp.clone(); ByteBuffer.wrap(bad).order(ByteOrder.LITTLE_ENDIAN).putInt(4, Integer.MAX_VALUE); rejects(bad);
+        bad = nsp.clone(); ByteBuffer.wrap(bad).order(ByteOrder.LITTLE_ENDIAN).putInt(32, -1); rejects(bad);
+        bad = nsp.clone(); bad[48] = 65; rejects(bad);
+        bad = xci.clone(); ByteBuffer.wrap(bad).order(ByteOrder.LITTLE_ENDIAN).putLong(0x130, Long.MAX_VALUE); rejects(bad);
+        rejects(container(true, "secure", secure));
+        // A sparse >4 GiB payload must retain 64-bit offsets and sizes without allocating it.
+        byte[] hugeHead = container(false, "large.nca", new byte[0]);
+        ByteBuffer.wrap(hugeHead).order(ByteOrder.LITTLE_ENDIAN).putLong(24, 5L << 30);
+        GamePackage.Reader huge = new GamePackage.Reader() {
+            public long length() { return hugeHead.length + (5L << 30); }
+            public void read(long at, byte[] out) { System.arraycopy(hugeHead, (int)at, out, 0, out.length); }
+        };
+        check(GamePackage.entries(huge).get(0).size == (5L << 30));
+        System.out.println(checks + " package checks passed");
+    }
+}

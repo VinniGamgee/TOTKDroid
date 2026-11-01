@@ -46,7 +46,7 @@ android {
     sourceSets {
         getByName("main") {
             java.srcDirs("src/main/java", deps.resolve("java"))  // (SDL's Java side, the same version as libSDL3.so)
-            jniLibs.srcDirs(gen.get().asFile.resolve("jniLibs"))
+            jniLibs.srcDirs(gen.get().asFile.resolve("jniLibs"), layout.buildDirectory.dir("package-jni"))
             assets.srcDirs(gen.get().asFile.resolve("assets"))
             res.srcDirs("src/main/res", gen.get().asFile.resolve("res"))
         }
@@ -182,3 +182,28 @@ tasks.named("preBuild") { dependsOn(prepareTotkRecompAndroid) }
 tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("buildCMake") }.configureEach {
     dependsOn(prepareTotkRecompAndroid)
 }
+
+// Package the import helper as a PIE executable in nativeLibraryDir. It is never
+// loaded with System.loadLibrary: ProcessBuilder runs it in an isolated process.
+val preparePackageImporter by tasks.registering {
+    inputs.dir(repo.resolve("android/package_import"))
+    inputs.dir(repo.resolve("third_party/hactool"))
+    val output = layout.buildDirectory.dir("package-jni/arm64-v8a")
+    outputs.dir(output)
+    doLast {
+        val sdk = android.sdkDirectory
+        val cmake = sdk.resolve("cmake/3.30.4/bin/cmake")
+        val ninja = sdk.resolve("cmake/3.30.4/bin/ninja")
+        val toolchain = sdk.resolve("ndk/${android.ndkVersion}/build/cmake/android.toolchain.cmake")
+        require(cmake.isFile && toolchain.isFile) { "Install CMake 3.30.4 and NDK ${android.ndkVersion} through Android SDK Manager." }
+        val build = layout.buildDirectory.dir("package-import").get().asFile
+        providers.exec {
+            commandLine(cmake, "-S", repo.resolve("android/package_import"), "-B", build,
+                "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$ninja", "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
+                "-DANDROID_ABI=arm64-v8a", "-DANDROID_PLATFORM=android-30", "-DCMAKE_BUILD_TYPE=Release")
+        }.result.get().assertNormalExitValue()
+        providers.exec { commandLine(cmake, "--build", build, "--parallel", "4") }.result.get().assertNormalExitValue()
+        build.resolve("libpackage_import.so").copyTo(output.get().asFile.resolve("libpackage_import.so"), overwrite = true)
+    }
+}
+tasks.named("preBuild") { dependsOn(preparePackageImporter) }

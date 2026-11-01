@@ -1,0 +1,69 @@
+name: TOTKDroid Android NSP-XCI
+
+on:
+  push:
+    branches: [feature/package-import]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android toolchain
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;30.0.16248370' 'cmake;3.30.4'
+      - name: Host parser tests
+        run: python3 tools/test_package_import.py
+      - uses: actions/cache@v4
+        with:
+          path: |
+            android/deps/out
+            android/deps/ffmpeg
+          key: totk-android30-deps-${{ runner.os }}-${{ hashFiles('android/deps/build_deps.sh', 'android/deps/build_ffmpeg.sh', '.gitmodules') }}
+      - name: Build runtime dependencies
+        run: bash android/deps/build_deps.sh
+      - name: Build FFmpeg
+        env:
+          ANDROID_NDK_LINUX: ${{ env.ANDROID_HOME }}/ndk/30.0.16248370
+        run: |
+          export ANDROID_NDK_LINUX="$ANDROID_HOME/ndk/30.0.16248370"
+          if [ ! -f android/deps/ffmpeg/lib/libswresample.so ]; then
+            bash android/deps/build_ffmpeg.sh
+          fi
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build APK
+        working-directory: android/totkrecompandroid
+        run: bash gradlew assembleDebug --stacktrace --no-daemon
+      - name: Check import helper is packaged
+        run: |
+          python3 - <<'PY'
+          import glob, zipfile
+          apk = glob.glob('android/totkrecompandroid/app/build/outputs/apk/debug/*.apk')
+          assert len(apk) == 1, apk
+          with zipfile.ZipFile(apk[0]) as z:
+              info = z.getinfo('lib/arm64-v8a/libpackage_import.so')
+              data = z.read(info)
+              assert data[:4] == b'\x7fELF' and int.from_bytes(data[18:20], 'little') == 183
+              print('ARM64 package importer present:', info.file_size, 'bytes')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TOTKDroid-0.2.0-NSP-XCI-debug
+          path: android/totkrecompandroid/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
