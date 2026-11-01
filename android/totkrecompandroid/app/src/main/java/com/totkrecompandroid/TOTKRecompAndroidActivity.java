@@ -283,10 +283,10 @@ public class TOTKRecompAndroidActivity extends SDLActivity {
 
     private void requestOptionalTitleKeys(Uri keyUri) {
         packageKeys = keyUri;
-        new AlertDialog.Builder(this).setTitle("title.keys (opcional)")
-            .setMessage("Alguns NSPs têm um ticket personalizado. Nesse caso, prod.keys não contém a chave de título do jogo. Se você possui title.keys exportado da sua própria cópia, selecione-o. Caso contrário, tente sem ele.")
+        new AlertDialog.Builder(this).setTitle("Chave de título (title.keys)")
+            .setMessage("O TOTKDroid lê automaticamente os tickets comuns dos NSP/XCI. Mas tickets personalizados, ou pacotes sem um ticket correspondente, exigem o arquivo title.keys da sua própria cópia. prod.keys não substitui title.keys nesses casos.")
             .setPositiveButton("Selecionar title.keys", (d, w) -> openPackageDocument(REQ_TITLE_KEYS))
-            .setNegativeButton("Continuar sem title.keys", (d, w) -> startPackageImport(null))
+            .setNegativeButton("Tentar sem title.keys", (d, w) -> startPackageImport(null))
             .setOnCancelListener(d -> startPackageImport(null)).show();
     }
 
