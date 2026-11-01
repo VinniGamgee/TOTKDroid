@@ -102,6 +102,41 @@ class PackageTests {
         ByteBuffer.wrap(unknown).order(ByteOrder.BIG_ENDIAN).putInt(0x012345);
         try { GameTicket.read(unknown); throw new AssertionError("accepted unknown signature"); }
         catch (IOException expected) { checks++; }
+        // Patch NSP: its Meta NCA is tagged with patch title ID, while a
+        // constituent Program NCA can retain the application's base ProgramId.
+        String baseId = GameNcaSelector.BASE_ID;
+        String patchId = GameNcaSelector.PATCH_ID;
+        GameNcaSelector.Entry baseProg = GameNcaSelector.parse("base.nca",
+            "Title ID: " + baseId + "\nContent Type: Program\n");
+        GameNcaSelector.Entry patchProgBaseId = GameNcaSelector.parse("patch.nca",
+            "Title ID: " + baseId + "\nContent Type: Program\n");
+        GameNcaSelector.Entry patchMeta = GameNcaSelector.parse("patch.cnmt.nca",
+            "Title ID: " + patchId + "\nContent Type: Meta\n");
+        GameNcaSelector.Entry patchControl = GameNcaSelector.parse("control.nca",
+            "Title ID: " + patchId + "\nContent Type: Control\n");
+        GameNcaSelector.Entry patchProgPatchId = GameNcaSelector.parse("update.nca",
+            "Title ID: " + patchId + "\nContent Type: Program\n");
+        check(GameNcaSelector.choose(Arrays.asList(baseProg), false) == baseProg);
+        check(GameNcaSelector.choose(Arrays.asList(patchMeta, patchControl, patchProgBaseId), true)
+            == patchProgBaseId);
+        check(GameNcaSelector.choose(Arrays.asList(patchProgPatchId, patchMeta), true)
+            == patchProgPatchId);
+        check(GameNcaSelector.choose(Arrays.asList(baseProg), true, true) == null);
+        // A plain base game cannot be passed off as an update.
+        try {
+            GameNcaSelector.choose(Arrays.asList(baseProg), true);
+            throw new AssertionError("accepted base as patch");
+        } catch (IOException expected) { checks++; }
+        // A mixed package with multiple candidates is ambiguous without
+        // reading the CNMT content table: refuse rather than guessing.
+        try {
+            GameNcaSelector.choose(Arrays.asList(patchMeta, patchProgBaseId, patchProgPatchId), true);
+            throw new AssertionError("accepted ambiguous patch");
+        } catch (IOException expected) { checks++; }
+        GameNcaSelector.Entry withRights = GameNcaSelector.parse("rights.nca",
+            "Title ID: " + patchId + "\nContent Type: Program\n" +
+            "Rights ID: 000102030405060708090a0b0c0d0e0f\n");
+        check(withRights.rightsId.equals("000102030405060708090a0b0c0d0e0f"));
         System.out.println(checks + " package checks passed");
     }
 }
