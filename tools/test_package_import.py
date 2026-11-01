@@ -94,4 +94,20 @@ with tempfile.TemporaryDirectory() as tmp:
         assert 'master_key_00' in completed.stderr, completed.stderr
         assert 'DEADBEEF' not in completed.stdout + completed.stderr
         assert 'prod.keys does not exist' not in completed.stdout, completed.stdout
+        # Reproduce the 34-character mariko_master_kek_source_05 failure.
+        # A 0x prefix is notation only; it must not produce a warning, or
+        # change the 16 underlying bytes. Also test uppercase 0X.
+        for prefix in ('0x', '0X', ''):
+            prefixed = pathlib.Path(tmp) / ('prefixed-' + (prefix or 'none') + '.keys')
+            prefixed.write_text(
+                'mariko_master_kek_source_05 = ' + prefix + '11' * 16 + '\n'
+                + 'header_key = ' + '00' * 32 + '\n')
+            prefixed_cmd = [str(hactool), '--totkdroid-header-only', '-t', 'nca',
+                            '-k', str(prefixed), f'slice:4096:3072:{fake}']
+            valid_prefix = sp.run(prefixed_cmd, cwd=ROOT, check=True,
+                                  capture_output=True, text=True)
+            assert 'Title ID: 0100f2c0115b6000' in valid_prefix.stdout
+            assert 'mariko_master_kek_source_05' not in valid_prefix.stderr, valid_prefix.stderr
+        print('34-character 0x-prefixed Mariko key and uppercase variant passed')
+
         print('Header-only NCA scan and optional malformed prod.keys entry passed')
