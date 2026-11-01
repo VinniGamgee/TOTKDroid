@@ -45,6 +45,10 @@ final class GameNcaSelector {
     }
 
     static Entry choose(List<Entry> entries, boolean update) throws IOException {
+        return choose(entries, update, false);
+    }
+
+    static Entry choose(List<Entry> entries, boolean update, boolean optional) throws IOException {
         boolean patchMeta = false;
         Set<String> observed = new LinkedHashSet<>();
         for (Entry entry : entries) {
@@ -70,6 +74,7 @@ final class GameNcaSelector {
                     : "Jogo base ambíguo: várias NCAs Program do TOTK.");
         }
         if (candidates.size() == 1) return candidates.get(0);
+        if (update && optional && !patchMeta) return null;
 
         String list = String.join(", ", observed);
         if (list.length() > 220) list = list.substring(0, 220) + "...";
