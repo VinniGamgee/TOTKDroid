@@ -667,6 +667,28 @@ extern "C" JNIEXPORT jstring JNICALL Java_com_totkrecompandroid_TOTKRecompAndroi
     return env->NewStringUTF(dest.c_str());
 }
 
+static bool keep_loose(const char *rel);
+
+// Package imports prepare and validate everything in staging before replacing the installed game.
+extern "C" JNIEXPORT jstring JNICALL Java_com_totkrecompandroid_TOTKRecompAndroidActivity_nativePackageDestination(
+        JNIEnv *env, jclass, jint version) {
+    char vr[1024] = "";
+    std::string dest = rt_version_root(version, vr, sizeof vr) ? std::string(vr) + "/extracted" : g_root;
+    return env->NewStringUTF(dest.c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL Java_com_totkrecompandroid_TOTKRecompAndroidActivity_nativePackageLoose(
+        JNIEnv *env, jclass, jint fd, jstring directory) {
+    const char *path = env->GetStringUTFChars(directory, NULL);
+    if (!path) { close(fd); return NULL; }
+    std::string dest = std::string(path) + "/romfs";
+    env->ReleaseStringUTFChars(directory, path);
+    mkdir(dest.c_str(), 0755);
+    char why[256] = "";
+    bool ok = romfs_image_extract(fd, dest.c_str(), keep_loose, why, sizeof why);
+    close(fd);
+    return ok ? NULL : env->NewStringUTF(why);
+}
+
 // The picked romfs/'s files (relative paths) and its System/Version.txt's first bytes against the picked exefs/'s
 // version, before nativeImportBegin: a folder that can't be used leaves an earlier setup alone. false = the failure is
 // set (nativeImportDone(6) follows)
@@ -843,9 +865,11 @@ extern "C" JNIEXPORT void JNICALL Java_com_totkrecompandroid_TOTKRecompAndroidAc
     pthread_mutex_unlock(&g_lock);
     if (result == 1 || result == 6) return;
     set_failure(result == 2 ? FAIL_NOT_FOUND : result == 3 ? FAIL_UNUSABLE : result == 4 ? FAIL_VERSION : FAIL_COPY);
-    if (result == 5 && detail.rfind("can't read ", 0) == 0)  // (not the free space: issue #17 read it as 30 GB asked for)
+    if (result == 5 && detail.rfind("can't read ", 0) == 0)
         set_job("Setup didn't finish", true,
                 "A file in the chosen folder couldn't be read. Copy the whole game folder again and try again.");
+    else if (result == 5 && !detail.empty())
+        set_job("Setup didn't finish", true);  // show the real cause, not a misleading generic 40 GB hint
     set_job_detail(detail);
 }
 
