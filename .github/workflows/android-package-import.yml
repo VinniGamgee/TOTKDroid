@@ -30,9 +30,16 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - name: Install Android toolchain
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;30.0.16248370' 'cmake;3.30.4'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+      - name: Validate Gradle configuration
+        working-directory: android/totkrecompandroid
+        run: bash gradlew help --stacktrace --no-daemon
       - name: Host parser tests
         run: python3 tools/test_package_import.py
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: native-cache
         with:
           path: |
             android/deps/out
@@ -48,7 +55,13 @@ jobs:
           if [ ! -f android/deps/ffmpeg/lib/libswresample.so ]; then
             bash android/deps/build_ffmpeg.sh
           fi
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/cache/save@v4
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            android/deps/out
+            android/deps/ffmpeg
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Build APK
         working-directory: android/totkrecompandroid
         run: bash gradlew assembleDebug --stacktrace --no-daemon
