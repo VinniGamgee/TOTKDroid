@@ -54,13 +54,17 @@ saves antes de qualquer mudança de instalação.
   truncamento, limites inválidos, nomes inseguros e tabela excessiva.
 - Leitor C: offset acima de 4 GiB, limite de leitura e seek fora da janela.
 - `git diff --check`.
+- APK Android ARM64 compilado no GitHub Actions (run 41347121010, commit 0432ee8).
+- ZIP do artifact conferido pelo SHA-256; APK contém helper ARM64 executável,
+  linker Android, funções JNI novas e seletor NSP/XCI.
+- Cabeçalho NCA3 criptografado sintético identificado através de uma janela do pacote.
 
 Reproduzir: `python3 tools/test_package_import.py`.
 Compilar helper no host: `cmake -S android/package_import -B /tmp/package-build && cmake --build /tmp/package-build`.
 
 ## Validação pendente (não declarar pronto para uso)
 
-Não foi compilado um APK Android nem importado um dump real de TOTK nesta execução.
+O APK Android compilou, mas nenhum dump real de TOTK foi importado nesta execução.
 Ainda precisam ser testados em aparelho: execução do helper empacotado e abertura de
 `/proc/<pid>/fd`, NSP + update separado, XCI + update, pacote com update incluído,
 chaves ausentes/incorretas, falta de espaço, interrupção/recuperação e abertura do jogo.
