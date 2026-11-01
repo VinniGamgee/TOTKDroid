@@ -26,7 +26,8 @@ As chaves temporárias ficam no diretório privado e são removidas ao terminar.
 - Importação única, não montagem direta do NSP/XCI a cada execução.
 - Exige arquivo local com acesso aleatório e pelo menos 20 GiB livres. Manter uma
   instalação anterior até a conclusão requer esse espaço adicional.
-- Tickets comuns RSA-2048 são lidos automaticamente. Tickets personalizados exigem que a chave de título correspondente esteja em `title.keys` (escolhido opcionalmente); o bloco RSA do ticket não pode ser usado como chave AES. NSZ/XCZ e pacotes divididos não são suportados.
+- A leitura de tickets suporta as sete variantes de assinatura descritas no formato Switch e calcula a posição dos dados a partir do tipo. Tickets não reconhecidos ou inválidos são ignorados (registrados no log), sem inventar chave; somente a NCA do programa TOTK determina se a importação exige uma chave de título.
+- Tickets comuns podem fornecer a chave criptografada. Tickets personalizados exigem que a chave de título correspondente esteja em `title.keys` (opcional); o bloco RSA do ticket não pode ser usado como chave AES. NSZ/XCZ e pacotes divididos não são suportados.
 - Um pacote com múltiplos programas TOTK da mesma categoria é rejeitado, sem escolher
   silenciosamente uma versão.
 - UI nova em português; o fluxo anterior de pastas permanece disponível.
@@ -63,7 +64,7 @@ Compilar helper no host: `cmake -S android/package_import -B /tmp/package-build 
 
 ## Validação pendente (não declarar pronto para uso)
 
-O APK Android anterior compilou, mas as alterações posteriores (suporte a `title.keys` e tickets personalizados) ainda exigem uma nova compilação. Nenhum dump real de TOTK foi importado nesta execução.
+A compilação anterior passou, mas a leitura de alguns tickets falhou no aparelho com a mensagem «Assinatura de ticket não suportada». A nova correção aceita cabeçalhos de assinatura variáveis e não bloqueia pacotes só por tickets sem chave utilizável. Ainda não há validação da importação completa com dump real.
 Ainda precisam ser testados em aparelho: execução do helper empacotado e abertura de
 `/proc/<pid>/fd`, NSP + update separado, XCI + update, pacote com update incluído,
 chaves ausentes/incorretas, falta de espaço, interrupção/recuperação e abertura do jogo.
