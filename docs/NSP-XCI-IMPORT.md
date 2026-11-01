@@ -27,6 +27,7 @@ As chaves temporárias ficam no diretório privado e são removidas ao terminar.
 - Exige arquivo local com acesso aleatório e pelo menos 20 GiB livres. Manter uma
   instalação anterior até a conclusão requer esse espaço adicional.
 - A leitura de tickets suporta as sete variantes de assinatura descritas no formato Switch e calcula a posição dos dados a partir do tipo. Tickets não reconhecidos ou inválidos são ignorados (registrados no log), sem inventar chave; somente a NCA do programa TOTK determina se a importação exige uma chave de título.
+- A assinatura do ticket ES é interpretada em little-endian. Em particular, os bytes 04 00 01 00 correspondem a 0x010004 (RSA-2048/SHA-256), e não a 0x04000100; o erro foi reproduzido e coberto em testes.
 - A importação reconhece tickets ES assinados e também arquivos com apenas o corpo ES de 0x2C0 bytes, quando versão, tipo e Rights ID são válidos. Um ticket sem conteúdo aproveitável não é usado para inventar chaves.
 - Se nenhum ticket for aceito, a mensagem exibe o motivo objetivo (tamanho, assinatura, versão, tipo ou Rights ID) sem revelar valores de chaves.
 - Tickets comuns podem fornecer a chave criptografada automaticamente. Tickets personalizados ou pacotes sem ticket correspondente exigem `title.keys` exportado da própria cópia (opcional apenas quando a chave já está no ticket comum). O bloco RSA personalizado não pode ser usado como chave AES. NSZ/XCZ e pacotes divididos não são suportados.
