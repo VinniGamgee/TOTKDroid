@@ -114,13 +114,23 @@ final class PackageImporter {
         if (out.isEmpty()) throw new IOException("title.keys não contém chaves válidas.");
     }
 
-    private void tickets(Source s, Map<String,String> out, Set<String> personalized) throws Exception {
+    private static final class TicketStats {
+        int total, common, personalized, ignored;
+        String description() {
+            return total + " ticket(s): " + common + " comum(ns), "
+                + personalized + " personalizado(s), " + ignored + " não reconhecido(s)";
+        }
+    }
+
+    private void tickets(Source s, Map<String,String> out, Set<String> personalized, TicketStats stats) throws Exception {
         if (s == null) return;
         for (GamePackage.Entry e : s.entries) if (e.name.toLowerCase(Locale.ROOT).endsWith(".tik")) {
+            stats.total++;
             // A container may include tickets for unrelated content, and some dumps
             // contain non-standard tickets. Only the NCA selected for TOTK decides
             // whether a title key is actually needed. Never invent one from junk.
             if (e.size < 4 || e.size > 65536) {
+                stats.ignored++;
                 android.util.Log.w("TOTKDroid/PackageImport", "Ignorando ticket com tamanho inválido: " + e.name);
                 continue;
             }
@@ -129,14 +139,17 @@ final class PackageImporter {
             try {
                 ticket = GameTicket.read(bytes);
             } catch (IOException unsupported) {
+                stats.ignored++;
                 android.util.Log.w("TOTKDroid/PackageImport",
                         "Ignorando ticket não reconhecido (" + e.name + "): " + unsupported.getMessage());
                 continue;
             }
             if (ticket.personalized) {
+                stats.personalized++;
                 personalized.add(ticket.rightsId);
                 continue;
             }
+            stats.common++;
             String old = out.putIfAbsent(ticket.rightsId, ticket.encryptedTitleKey);
             if (old != null && !old.equals(ticket.encryptedTitleKey))
                 throw new IOException("Chaves conflitantes entre ticket e title.keys.");
@@ -223,7 +236,7 @@ final class PackageImporter {
         }
     }
     private String program(Source s, boolean update, Map<String,String> titleKeys,
-                           Set<String> personalized, boolean optional) throws Exception {
+                           Set<String> personalized, boolean optional, TicketStats stats) throws Exception {
         if (s == null) return null;
         List<GameNcaSelector.Entry> found = new ArrayList<>();
         Map<String,GamePackage.Entry> named = new HashMap<>();
@@ -239,9 +252,24 @@ final class PackageImporter {
         GameNcaSelector.Entry target = GameNcaSelector.choose(found, update, optional);
         if (target == null) return null;
         if (target.rightsId != null && !titleKeys.containsKey(target.rightsId)) {
-            throw new IOException(personalized.contains(target.rightsId)
-                ? "Este programa usa ticket personalizado. Selecione title.keys da sua própria cópia com a chave de título correspondente."
-                : "Chave de título ausente para o programa TOTK. Selecione title.keys da sua própria cópia.");
+            String part = update ? "Update 1.4.3" : "Jogo base";
+            String reason;
+            if (personalized.contains(target.rightsId)) {
+                reason = "Ticket personalizado correspondente detectado. A chave não pode ser obtida desse ticket apenas com prod.keys.";
+            } else if (stats.total == 0) {
+                reason = "Este pacote não contém nenhum arquivo .tik.";
+            } else if (stats.common == 0 && stats.personalized > 0) {
+                reason = "Há tickets personalizados, mas nenhum fornece uma chave comum para este programa.";
+            } else if (stats.ignored > 0 && stats.common == 0) {
+                reason = "Os tickets encontrados não puderam ser lidos.";
+            } else {
+                reason = "Nenhum ticket comum deste pacote corresponde à chave exigida por esta NCA.";
+            }
+            String selected = suppliedTitleKeys == null
+                ? "Selecione title.keys exportado da sua própria cópia."
+                : "O title.keys selecionado também não contém a entrada correspondente.";
+            throw new IOException(part + ": chave de título indisponível. " + reason
+                + " (" + stats.description() + "). " + selected);
         }
         return s.slice(named.get(target.fileName));
     }
@@ -250,13 +278,17 @@ final class PackageImporter {
             Map<String,String> tk = new TreeMap<>();
             Set<String> personalized = new HashSet<>();
             suppliedTitleKeys(tk);
-            tickets(base, tk, personalized);
-            tickets(update, tk, personalized);
+            TicketStats baseTickets = new TicketStats(), updateTickets = new TicketStats();
+            tickets(base, tk, personalized, baseTickets);
+            tickets(update, tk, personalized, updateTickets);
+            android.util.Log.i("TOTKDroid/PackageImport",
+                "Base: " + baseTickets.description() + "; Update: " + updateTickets.description());
             try (Writer w = new OutputStreamWriter(new FileOutputStream(titles), StandardCharsets.US_ASCII)) {
                 for (Map.Entry<String,String> e : tk.entrySet()) w.write(e.getKey() + " = " + e.getValue() + "\n");
             }
-            String b = program(base, false, tk, personalized, false);
-            String u = program(update == null ? base : update, true, tk, personalized, update == null);
+            String b = program(base, false, tk, personalized, false, baseTickets);
+            String u = program(update == null ? base : update, true, tk, personalized, update == null,
+                update == null ? baseTickets : updateTickets);
             if (b == null) throw new IOException("Jogo base TOTK não encontrado ou chaves incompatíveis.");
             File out = new File(work, "romfs.bin"), exefs = new File(work, "exefs");
             if (!exefs.mkdir()) throw new IOException("Não foi possível criar a pasta temporária.");
