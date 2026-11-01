@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory() as tmp:
         f.write(b'abc')
         f.flush()
         name = 'totkdroid-test-' + str(os.getpid())
-        address = '\\0' + name
+        address = '\0' + name
         errors = []
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(address)
@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory() as tmp:
         run('cmake', '--build', str(builder), '-j', '2')
         hactool = builder / 'libpackage_import.so'
         keyset = pathlib.Path(tmp) / 'prod.keys'
-        keyset.write_text('# synthetic keyset for an unencrypted NCA3 header\\n')
+        keyset.write_text('# synthetic keyset for an unencrypted NCA3 header\n')
         nca = bytearray(0xC00)
         nca[0x200:0x204] = b'NCA3'
         nca[0x205] = 0
