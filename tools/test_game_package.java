@@ -58,12 +58,16 @@ class PackageTests {
         check(GamePackage.entries(huge).get(0).size == (5L << 30));
         // Synthetic ticket headers: a personalized titlekey block is NOT an encrypted AES title key.
         byte[] ticket = new byte[0x400];
-        ByteBuffer.wrap(ticket).order(ByteOrder.BIG_ENDIAN).putInt(0, 0x10004);
+        ByteBuffer.wrap(ticket).order(ByteOrder.LITTLE_ENDIAN).putInt(0, 0x10004);
         ticket[0x280] = 2;  // Switch ES ticket version
         for (int i = 0; i < 16; i++) {
             ticket[0x2a0 + i] = (byte)i;
             ticket[0x180 + i] = (byte)(i + 16);
         }
+        // Exact device-reported bytes: 04 00 01 00 read as BE yielded 0x04000100.
+        // The parser must recognize this as little-endian 0x00010004.
+        check((ticket[0] & 0xff) == 4 && ticket[1] == 0 &&
+              (ticket[2] & 0xff) == 1 && ticket[3] == 0);
         GameTicket common = GameTicket.read(ticket);
         check(!common.personalized && common.rightsId.equals("000102030405060708090a0b0c0d0e0f"));
         check(common.encryptedTitleKey.equals("101112131415161718191a1b1c1d1e1f"));
@@ -84,7 +88,7 @@ class PackageTests {
             int pos = offsets[i];
             check(GameTicket.dataOffset(types[i]) == pos);
             byte[] variant = new byte[pos + 0x2c0];
-            ByteBuffer.wrap(variant).order(ByteOrder.BIG_ENDIAN).putInt(types[i]);
+            ByteBuffer.wrap(variant).order(ByteOrder.LITTLE_ENDIAN).putInt(types[i]);
             variant[pos + 0x140] = 2;
             for (int j = 0; j < 16; j++) {
                 variant[pos + 0x40 + j] = (byte)(j + 16);
@@ -101,7 +105,7 @@ class PackageTests {
             catch (IOException expected) { checks++; }
         }
         byte[] unknown = new byte[0x400];
-        ByteBuffer.wrap(unknown).order(ByteOrder.BIG_ENDIAN).putInt(0x012345);
+        ByteBuffer.wrap(unknown).order(ByteOrder.LITTLE_ENDIAN).putInt(0x012345);
         try { GameTicket.read(unknown); throw new AssertionError("accepted unknown signature"); }
         catch (IOException expected) { checks++; }
         // Some exporters save only the documented 0x2C0-byte ES data body.
