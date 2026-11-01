@@ -59,6 +59,7 @@ class PackageTests {
         // Synthetic ticket headers: a personalized titlekey block is NOT an encrypted AES title key.
         byte[] ticket = new byte[0x400];
         ByteBuffer.wrap(ticket).order(ByteOrder.BIG_ENDIAN).putInt(0, 0x10004);
+        ticket[0x280] = 2;  // Switch ES ticket version
         for (int i = 0; i < 16; i++) {
             ticket[0x2a0 + i] = (byte)i;
             ticket[0x180 + i] = (byte)(i + 16);
@@ -84,6 +85,7 @@ class PackageTests {
             check(GameTicket.dataOffset(types[i]) == pos);
             byte[] variant = new byte[pos + 0x2c0];
             ByteBuffer.wrap(variant).order(ByteOrder.BIG_ENDIAN).putInt(types[i]);
+            variant[pos + 0x140] = 2;
             for (int j = 0; j < 16; j++) {
                 variant[pos + 0x40 + j] = (byte)(j + 16);
                 variant[pos + 0x160 + j] = (byte)j;
@@ -101,6 +103,37 @@ class PackageTests {
         byte[] unknown = new byte[0x400];
         ByteBuffer.wrap(unknown).order(ByteOrder.BIG_ENDIAN).putInt(0x012345);
         try { GameTicket.read(unknown); throw new AssertionError("accepted unknown signature"); }
+        catch (IOException expected) { checks++; }
+        // Some exporters save only the documented 0x2C0-byte ES data body.
+        // These may be parsed when the ticket version, type and Rights ID
+        // are valid, but no key is ever derived from a personalized block.
+        byte[] stripped = new byte[0x2c0];
+        stripped[0x140] = 2;
+        for (int i = 0; i < 16; i++) {
+            stripped[0x40 + i] = (byte)(0x10 + i);
+            stripped[0x160 + i] = (byte)i;
+        }
+        GameTicket bare = GameTicket.read(stripped);
+        check(bare.strippedSignature && !bare.personalized &&
+              bare.encryptedTitleKey.equals(common.encryptedTitleKey));
+        stripped[0x141] = 1;
+        check(GameTicket.read(stripped).personalized &&
+              GameTicket.read(stripped).encryptedTitleKey == null);
+        stripped[0x141] = 0;
+        byte[] invalidVersion = stripped.clone();
+        invalidVersion[0x140] = 0;
+        try { GameTicket.read(invalidVersion); throw new AssertionError("accepted invalid bare body"); }
+        catch (IOException expected) { checks++; }
+        byte[] noRights = stripped.clone();
+        Arrays.fill(noRights, 0x160, 0x170, (byte)0);
+        try { GameTicket.read(noRights); throw new AssertionError("accepted empty rights ID"); }
+        catch (IOException expected) { checks++; }
+        byte[] noKey = stripped.clone();
+        Arrays.fill(noKey, 0x40, 0x50, (byte)0);
+        try { GameTicket.read(noKey); throw new AssertionError("accepted empty title key"); }
+        catch (IOException expected) { checks++; }
+        byte[] incomplete = Arrays.copyOf(ticket, ticket.length - 1);
+        try { GameTicket.read(incomplete); throw new AssertionError("accepted incomplete standard ticket"); }
         catch (IOException expected) { checks++; }
         // Patch NSP: its Meta NCA is tagged with patch title ID, while a
         // constituent Program NCA can retain the application's base ProgramId.
