@@ -5,6 +5,11 @@
 #include "aes.h"
 #include "extkeys.h"
 
+/* The normal hactool CLI stays strict; only TOTKDroid enables compatibility. */
+static int import_compat_mode;
+static const char *current_field;
+void extkeys_set_import_compat_mode(int enabled) { import_compat_mode = enabled; }
+
 /**
  * Reads a line from file f and parses out the key and value from it.
  * The format of a line must match /^ *[A-Za-z0-9_] *[,=] *.+$/.
@@ -80,7 +85,11 @@ static int get_kv(FILE *f, char **key, char **value) {
     }
 
     p = line;
+    /* Accept UTF-8 BOM and comment-only lines from recent key dump tools. */
+    if ((unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbb &&
+        (unsigned char)p[2] == 0xbf) p += 3;
     SKIP_SPACE(p);
+    if (*p == '#' || *p == ';' || *p == '\0') return 0;
     k = p;
 
     /* Validate key and convert to lower case. */
@@ -129,6 +138,12 @@ static int get_kv(FILE *f, char **key, char **value) {
         ;
 
     *(p + 1) = '\0';
+    /* Remove trailing inline comments and surrounding whitespace. */
+    char *comment = strpbrk(v, "#;");
+    if (comment) {
+        while (comment > v && (comment[-1] == ' ' || comment[-1] == '\t')) --comment;
+        *comment = '\0';
+    }
 
     *key = k;
     *value = v;
@@ -152,25 +167,26 @@ static char hextoi(char c) {
 }
 
 void parse_hex_key(unsigned char *key, const char *hex, unsigned int len) {
-    if (strlen(hex) != 2 * len) {
-        fprintf(stderr, "Key (%s) must be %"PRIu32" hex digits!\n", hex, 2 * len);
-        exit(EXIT_FAILURE);
-    }
-
-    for (unsigned int i = 0; i < 2 * len; i++) {
-        if (!ishex(hex[i])) {
-            fprintf(stderr, "Key (%s) must be %"PRIu32" hex digits!\n", hex, 2 * len);
-            exit(EXIT_FAILURE);
+    size_t actual = strlen(hex);
+    int valid = actual == 2U * len;
+    if (valid) {
+        for (size_t i = 0; i < actual; i++) {
+            if (!ishex(hex[i])) { valid = 0; break; }
         }
     }
-
+    if (!valid) {
+        /* No raw key bytes in stdout/stderr: diagnostics may appear in screenshots. */
+        const char *field = current_field ? current_field : "(sem nome)";
+        fprintf(stderr, "%s: entrada inválida em prod.keys: %s; esperado %u dígitos hexadecimais, recebido %zu caracteres.\n",
+                import_compat_mode ? "[WARN]" : "[ERROR]", field, 2U * len, actual);
+        memset(key, 0, len);
+        if (!import_compat_mode) exit(EXIT_FAILURE);
+        return;
+    }
     memset(key, 0, len);
-
-    for (unsigned int i = 0; i < 2 * len; i++) {
-        char val = hextoi(hex[i]);
-        if ((i & 1) == 0) {
-            val <<= 4;
-        }
+    for (unsigned int i = 0; i < 2U * len; i++) {
+        unsigned char val = (unsigned char)hextoi(hex[i]);
+        if ((i & 1) == 0) val <<= 4;
         key[i >> 1] |= val;
     }
 }
@@ -220,6 +236,7 @@ void extkeys_initialize_settings(hactool_settings_t *settings, FILE *f) {
             if (key == NULL || value == NULL) {
                 continue;
             }
+            current_field = key;
             int matched_key = 0;
             if (strcmp(key, "aes_kek_generation_source") == 0) {
                 parse_hex_key(keyset->aes_kek_generation_source, value, sizeof(keyset->aes_kek_generation_source));
@@ -456,10 +473,11 @@ void extkeys_initialize_settings(hactool_settings_t *settings, FILE *f) {
                 }
             }
             if (!matched_key && !settings->skip_key_warnings) {
-                fprintf(stderr, "[WARN]: Failed to match key \"%s\", (value \"%s\")\n", key, value);
+                fprintf(stderr, "[WARN]: Chave desconhecida ignorada: %s\n", key);
             }
         }
     }
+    current_field = NULL;
 }
 
 
