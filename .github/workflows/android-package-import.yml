@@ -79,7 +79,7 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: TOTKDroid-0.2.0-NSP-XCI-ticket-audit-debug
+          name: TOTKDroid-0.2.0-NSP-XCI-ticket-parser-debug
           path: android/totkrecompandroid/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
