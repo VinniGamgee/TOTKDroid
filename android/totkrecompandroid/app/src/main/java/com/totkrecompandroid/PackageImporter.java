@@ -79,9 +79,22 @@ final class PackageImporter {
     private void tickets(Source s, Map<String,String> out, Set<String> personalized) throws Exception {
         if (s == null) return;
         for (GamePackage.Entry e : s.entries) if (e.name.toLowerCase(Locale.ROOT).endsWith(".tik")) {
-            if (e.size < 0x2b0 || e.size > 65536) throw new IOException("Ticket inválido.");
+            // A container may include tickets for unrelated content, and some dumps
+            // contain non-standard tickets. Only the NCA selected for TOTK decides
+            // whether a title key is actually needed. Never invent one from junk.
+            if (e.size < 4 || e.size > 65536) {
+                android.util.Log.w("TOTKDroid/PackageImport", "Ignorando ticket com tamanho inválido: " + e.name);
+                continue;
+            }
             byte[] bytes = new byte[(int)e.size]; s.read(e.offset, bytes);
-            GameTicket ticket = GameTicket.read(bytes);
+            GameTicket ticket;
+            try {
+                ticket = GameTicket.read(bytes);
+            } catch (IOException unsupported) {
+                android.util.Log.w("TOTKDroid/PackageImport",
+                        "Ignorando ticket não reconhecido (" + e.name + "): " + unsupported.getMessage());
+                continue;
+            }
             if (ticket.personalized) {
                 personalized.add(ticket.rightsId);
                 continue;
