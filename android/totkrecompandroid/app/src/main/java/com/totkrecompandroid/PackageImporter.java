@@ -2,6 +2,8 @@ package com.totkrecompandroid;
 
 import android.content.Context;
 import android.net.Uri;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
 import android.os.ParcelFileDescriptor;
 import android.system.Os;
 import java.io.*;
@@ -26,15 +28,45 @@ final class PackageImporter {
         final long size;
         final String path;
         final List<GamePackage.Entry> entries;
+        final LocalServerSocket fdServer;
+        final Thread fdThread;
+        private volatile boolean closing;
         Source(Context c, Uri uri) throws Exception {
             fd = c.getContentResolver().openFileDescriptor(uri, "r");
             if (fd == null) throw new IOException("Não foi possível abrir o pacote.");
+            LocalServerSocket listener = null;
             try {
                 size = Os.fstat(fd.getFileDescriptor()).st_size;
                 if (size <= 0) throw new IOException("Use um arquivo no armazenamento local, com acesso aleatório.");
-                path = "/proc/" + android.os.Process.myPid() + "/fd/" + fd.getFd();
                 entries = GamePackage.entries(this);
-            } catch (Exception e) { fd.close(); throw e; }
+                // Android can block reopening /proc/<parent>/fd from a child even
+                // though SAF granted the parent read access. SCM_RIGHTS transfers
+                // the open descriptor directly, without copying the game package.
+                String name = "totkdroid-" + UUID.randomUUID().toString().replace("-", "");
+                listener = new LocalServerSocket(name);
+                fdServer = listener;
+                path = "fdpass:" + name;
+                fdThread = new Thread(() -> {
+                    while (!closing) {
+                        try (LocalSocket peer = fdServer.accept()) {
+                            peer.setFileDescriptorsForSend(
+                                new java.io.FileDescriptor[]{fd.getFileDescriptor()});
+                            peer.getOutputStream().write(1);
+                            peer.getOutputStream().flush();
+                        } catch (IOException e) {
+                            if (!closing) android.util.Log.e("TOTKDroid/PackageImport",
+                                "Falha ao entregar descritor SAF: " + e);
+                            break;
+                        }
+                    }
+                }, "package-fd-server");
+                fdThread.setDaemon(true);
+                fdThread.start();
+            } catch (Exception e) {
+                if (listener != null) listener.close();
+                fd.close();
+                throw e;
+            }
         }
         public long length() { return size; }
         public void read(long at, byte[] bytes) throws IOException {
@@ -47,7 +79,13 @@ final class PackageImporter {
             } catch (android.system.ErrnoException e) { throw new IOException("Arquivo sem acesso aleatório.", e); }
         }
         String slice(GamePackage.Entry e) { return "slice:" + e.offset + ":" + e.size + ":" + path; }
-        public void close() throws IOException { fd.close(); }
+        public void close() throws IOException {
+            closing = true;
+            fdServer.close();
+            fd.close();
+            try { fdThread.join(1000); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
     }
     // title.keys contains encrypted AES title keys indexed by the NCA rights IDs.
     // prod.keys alone cannot decrypt the console-bound RSA title-key block of a personalized ticket.
@@ -189,7 +227,7 @@ final class PackageImporter {
         if (s == null) return null;
         String found = null;
         for (GamePackage.Entry e : s.entries) if (e.name.endsWith(".nca")) {
-            String info = run(Arrays.asList("-i", "-t", "nca", s.slice(e)), null,
+            String info = run(Arrays.asList("--totkdroid-header-only", "-t", "nca", s.slice(e)), null,
                     (update ? "Update" : "Jogo base") + ", NCA " + e.name);
             String id = update ? "0100f2c0115b6800" : "0100f2c0115b6000";
             if (java.util.regex.Pattern.compile("(?m)^Title ID:\\s*" + id + "\\s*$").matcher(info).find() &&
